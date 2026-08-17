@@ -468,7 +468,7 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
     [ "${worst_s:-0}" -gt 3600 ] && echo "   single worst: $(burned "$worst_s") burned by one process"
     [ "${charges:-0}" -ge 2 ] && echo "   wasted power ≈ $charges phone charges ⚡"
     echo
-    echo "   found with machogs"
+    echo "   caught in 4k by machogs"
     echo "   github.com/bnishit/machogs"
     echo "  ---------------------------------------------"
     echo
@@ -827,7 +827,7 @@ if [ "$HUMAN" -eq 1 ]; then
   echo
   if [ "${n:-0}" -eq 0 ]; then
     echo "${E_OK}${GRN}${BLD}Nothing is hogging your Mac.${NC}"
-    echo "No stuck or abandoned programs are running."
+    echo "No stuck or abandoned programs are running. It's just vibing."
     if [ "$swap_pct" -gt 80 ]; then
       echo
       echo "${YLW}But your Mac has run out of fast memory.${NC}"
@@ -881,9 +881,9 @@ if [ "$HUMAN" -eq 1 ]; then
       echo "${E_BROOM}${BLD}Found $(count_unit "$ngroups" thing) worth closing.${NC}"
       echo "${DIM}I will ask before each one. Nothing closes unless you say yes.${NC}"
     elif [ "${hot:-0}" -gt 1 ]; then
-      echo "${E_PIG}${BLD}Found the hogs.${NC}"
+      echo "${E_PIG}${BLD}Found the hogs.${NC} ${DIM}Caught in 4K. Receipts below.${NC}"
     elif [ "${hot:-0}" -gt 0 ]; then
-      echo "${E_PIG}${BLD}Found the hog.${NC}"
+      echo "${E_PIG}${BLD}Found the hog.${NC} ${DIM}Caught in 4K. Receipts below.${NC}"
     else
       echo "${E_ZZZ}${BLD}Nothing is eating your CPU right now.${NC}"
       echo "${DIM}But $(count_unit "$n" "abandoned program") $([ "$n" -eq 1 ] && echo is || echo are) sitting in memory.${NC}"

@@ -7,7 +7,7 @@
 ```
 $ machogs
 
-  🐷 Found the hog.
+  🐷 Found the hog. Caught in 4K. Receipts below.
 
   🔥 bun — left by a Claude Code plugin
   Eating 98% of a CPU core. Running for 4 days.
@@ -20,9 +20,14 @@ $ machogs
   Nothing is closed unless you say yes.
 ```
 
-That one is real. It ran for four days at ninety percent of a CPU core. It
-burned 91 hours of processor time. Nobody opened it, nobody used it, and
-nothing on the machine said a word about it.
+That one is real, no cap. It ran for four days at ninety percent of a CPU
+core. It burned 91 hours of processor time. Nobody opened it, nobody used it,
+and nothing on the machine said a word about it. Caught in 4K.
+
+What it catches: 🔥 stuck spinners cooking your CPU · 👯 clone armies (one app,
+28 copies of the same helper) · 👻 ghost browsers nobody is looking at ·
+🧟 zombie helpers that survived their app · 🧠 memory squatters · 🌡️ and the
+honest diagnosis when only a restart will fix it.
 
 ---
 
@@ -169,7 +174,7 @@ And `machogs brag` prints the same thing as something you can paste:
    single worst: 91 hours burned by one process
    wasted power ≈ 37 phone charges ⚡
 
-   found with machogs
+   caught in 4k by machogs
    github.com/bnishit/machogs
   ---------------------------------------------
 ```

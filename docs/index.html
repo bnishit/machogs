@@ -150,6 +150,7 @@ h1 .loud{color:var(--pink)}
   padding:15px 16px;margin:14px 0;
 }
 .cmd code{flex:1;white-space:pre;font-size:13.5px;color:var(--cream);overflow-x:auto}
+.agent .cmd code{white-space:pre-wrap;color:var(--amber)}
 .cmd code .p{color:var(--cream-dim)}
 .copy{
   font-family:var(--mono);font-size:12.5px;font-weight:600;
@@ -243,7 +244,7 @@ footer{
   <div class="term-body">
 <span class="ln" style="animation-delay:.2s"><span class="p">$</span> machogs</span>
 <span class="ln" style="animation-delay:.7s"> </span>
-<span class="ln" style="animation-delay:.9s">🐷 <span class="b">Found the hog.</span></span>
+<span class="ln" style="animation-delay:.9s">🐷 <span class="b">Found the hog.</span> <span class="p">Caught in 4K. Receipts below.</span></span>
 <span class="ln" style="animation-delay:1.3s"> </span>
 <span class="ln" style="animation-delay:1.5s">  🔥 <span class="b">bun</span> <span class="p">— left by a Claude Code plugin</span></span>
 <span class="ln" style="animation-delay:1.8s">  Eating <span class="r">98%</span> of a CPU core. Running for 4 days.</span>
@@ -256,8 +257,9 @@ footer{
 <span class="ln" style="animation-delay:3.6s"><span class="p">Nothing is closed unless you say yes.</span></span>
   </div>
 </div>
-<p class="caption">That one is real. It ran four days at 98% of a CPU core and burned
-<b>91 hours</b> of processor time. Nobody opened it. Nothing on the machine said a word.</p>
+<p class="caption">That one is real, no cap. It ran four days at 98% of a CPU core and burned
+<b>91 hours</b> of processor time. Nobody opened it. Nothing on the machine said a word.
+Caught in 4K.</p>
 
 <div class="install" id="install">
   <h2>Install <span class="tick">in ten seconds</span></h2>
@@ -272,6 +274,39 @@ footer{
   </div>
   <p class="tiny">Then just run <b style="color:var(--amber)">machogs</b>. It only looks — it never closes anything on its own.</p>
 </div>
+
+<section class="agent" id="agents">
+  <h2>Too lazy to install? <span class="tick">Make your AI do it.</span></h2>
+  <p>Real talk: nobody with a hot laptop reads shell scripts. Paste this to Claude,
+  ChatGPT, Cursor — any AI with a terminal — and let it do everything:</p>
+  <div class="cmd">
+    <code>Install machogs from github.com/bnishit/machogs, read its AGENTS.md, then tell me what is hogging my Mac. Don't close anything without asking.</code>
+    <button class="copy" data-cmd="Install machogs from github.com/bnishit/machogs, read its AGENTS.md, then tell me what is hogging my Mac. Don't close anything without asking.">copy</button>
+  </div>
+  <p class="tiny">machogs speaks agent natively: <b style="color:var(--amber)">--json</b> output,
+  exit codes as verdicts, and every finding ships a pre-written <b style="color:var(--amber)">story</b>
+  your AI says to you word for word.</p>
+  <div class="filegrid">
+    <a class="file" href="https://github.com/bnishit/machogs/blob/main/AGENTS.md">AGENTS.md <span>· the instruction sheet</span></a>
+    <a class="file" href="llms.txt">llms.txt <span>· for LLM crawlers</span></a>
+    <a class="file" href="https://github.com/bnishit/machogs">GitHub <span>· one bash file, MIT</span></a>
+  </div>
+</section>
+
+<section>
+  <h2>What it catches <span class="tick">(caught in 4K)</span></h2>
+  <div class="stats">
+    <div class="stat"><span class="n">🔥</span><span class="t"><b>Stuck spinners.</b> An app left something cooking your CPU at 98% for days. Your fan's villain origin story.</span></div>
+    <div class="stat"><span class="n">👯</span><span class="t"><b>Clone armies.</b> One app started the same helper 28 times and kept none of the receipts.</span></div>
+    <div class="stat"><span class="n">👻</span><span class="t"><b>Ghost browsers.</b> Invisible browser windows nobody is looking at, quietly holding memory.</span></div>
+    <div class="stat"><span class="n">🧟</span><span class="t"><b>Zombie helpers.</b> You quit the app. Pieces of it said "nah" and stayed.</span></div>
+    <div class="stat"><span class="n">🧠</span><span class="t"><b>Memory squatters.</b> Idle leftovers sitting on RAM they'll never use again.</span></div>
+    <div class="stat"><span class="n">🌡️</span><span class="t"><b>The real diagnosis.</b> If your Mac is actually out of fast memory, it says so straight: restart, nothing else fixes it.</span></div>
+  </div>
+  <p class="dim">What it will NOT do: delete your files, "clean" caches, or free disk space.
+  Disk space is a 2010 problem — every other cleaner app already fights over it.
+  machogs only deals with what is <em>running</em>.</p>
+</section>
 
 <section class="faq">
   <h2>The questions you actually typed <span class="tick">to get here</span></h2>
@@ -303,7 +338,7 @@ footer{
 </section>
 
 <section>
-  <h2>The part that is <span class="tick">new</span></h2>
+  <h2>Why your Mac is <span class="tick">lowkey always busy</span></h2>
   <p>Your Mac used to run the programs you opened. That is no longer true. Today it runs
   the programs you opened, the helpers those programs started, the AI assistants you gave
   access to, and the background servers those assistants start so they can search the web
@@ -316,24 +351,6 @@ footer{
   <p class="dim">Every "clean your Mac" app ever written deletes caches to free disk space.
   That solves a problem from 2010. machogs deletes nothing — it looks at what is
   <em>running</em>, and it knows the names of the AI tools that leave things behind.</p>
-</section>
-
-<section class="agent" id="agents">
-  <h2>Built to be driven <span class="tick">by your AI</span></h2>
-  <p>Most people with a hot laptop will not read a shell script. They will ask Claude,
-  ChatGPT, Cursor, or a bot. So machogs speaks agent natively: <b>--json</b> prints one
-  clean object, exit codes carry the verdict (<b>0</b> clean, <b>10</b> look at this,
-  <b>2</b> bad args), and every finding ships a <b>story</b> — the sentence your agent
-  should say to you, already written.</p>
-  <p>Paste this to any agent with a terminal:</p>
-  <pre><span class="p"># tell your AI:</span>
-<span class="y">Install machogs from github.com/bnishit/machogs, read its AGENTS.md,
-then tell me what is hogging my Mac. Don't close anything without asking.</span></pre>
-  <div class="filegrid">
-    <a class="file" href="https://github.com/bnishit/machogs/blob/main/AGENTS.md">AGENTS.md <span>· the instruction sheet</span></a>
-    <a class="file" href="llms.txt">llms.txt <span>· for LLM crawlers</span></a>
-    <a class="file" href="https://github.com/bnishit/machogs">GitHub <span>· one bash file, MIT</span></a>
-  </div>
 </section>
 
 <section>
