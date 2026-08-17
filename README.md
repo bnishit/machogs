@@ -5,9 +5,9 @@
 ```
 $ machogs
 
-  Something is hogging your Mac.
+  🐷 Found the hog.
 
-  bun — left by a Claude Code plugin
+  🔥 bun — left by a Claude Code plugin
   Eating 98% of a CPU core. Running for 4 days.
   It is stuck in a loop. Nothing is waiting for it.
 
@@ -116,14 +116,16 @@ Killing a process is an event. Getting a CPU core back is a result. Same
 action, and only one of them is worth telling anyone about:
 
 ```
-Closed 1 program.
+🎉 Closed 1 program.
 You just got back 1.0 of a CPU core that nothing was using.
 They had already burned 91 hours of processor time.
+⚡ The electricity they wasted could have charged your phone about 36 times.
 Left alone, they would have burned 23 hours more by this time tomorrow.
 Roughly an hour or two of battery back, depending on your Mac.
 ```
 
-The battery line is an estimate and says so. The rest is measured.
+The battery and phone-charge lines are estimates and say so. The rest is
+measured.
 
 ## Who is the worst offender on your machine
 
@@ -137,7 +139,7 @@ Who leaves the most junk on your Mac
 since 2026-08-17
 
   APP                          CLOSED   CPU TIME WASTED
-  ChatGPT                          39   2 hours
+  ChatGPT                          39   2 hours 👑
   a Claude Code plugin              1   91 hours
 ```
 
@@ -145,12 +147,13 @@ And `machogs brag` prints the same thing as something you can paste:
 
 ```
   ---------------------------------------------
-   my mac was doing 93 hours of work
+   🐷 my mac was doing 93 hours of work
    for programs i never opened.
 
    40 background programs closed
    worst offender: ChatGPT (39 of them)
    single worst: 91 hours burned by one process
+   wasted power ≈ 37 phone charges ⚡
 
    found with machogs
    github.com/bnishit/machogs
@@ -161,7 +164,7 @@ And `machogs brag` prints the same thing as something you can paste:
 
 ```
 1 of 1
-  browser-control helper × 11 — left by ChatGPT
+  👯 browser-control helper × 11 — left by ChatGPT
   Idle, but holding memory. Oldest has sat there 31 minutes.
   A duplicate. One app started the same helper many times over.
 

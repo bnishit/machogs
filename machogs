@@ -60,6 +60,13 @@ RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'
 DIM=$'\033[2m'; BLD=$'\033[1m'; NC=$'\033[0m'
 [ -t 1 ] || { RED=; GRN=; YLW=; BLU=; DIM=; BLD=; NC=; }
 
+# Emoji follow the same rule as colour: gone when piped, so scripts and agents
+# never see them. Exception: the brag card keeps its emoji even piped, because
+# the pasted card IS the product.
+E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
+E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
+[ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
+
 MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0
 for a in "$@"; do
   case "$a" in
@@ -187,7 +194,10 @@ plain_age() {
   case "$1" in
     *-*)   count_unit "$(echo "$1" | cut -d- -f1)" day ;;
     *:*:*) count_unit "$(echo "$1" | cut -d: -f1)" hour ;;
-    *)     count_unit "$(echo "$1" | cut -d: -f1)" minute ;;
+    *)     local m; m=$(count_unit "$(echo "$1" | cut -d: -f1)" minute)
+           # "0 minutes" reads like a bug; a brand-new process is just young
+           [ "$m" = "0 minutes" ] && m="under a minute"
+           echo "$m" ;;
   esac
 }
 
@@ -220,6 +230,9 @@ burned() {
     else { printf "%d seconds", s }
   }'
 }
+
+# CPU seconds -> whole phone charges (see the note in receipt for the math).
+phone_charges() { awk -v s="${1:-0}" 'BEGIN{printf "%d", s/9000}'; }
 
 article() {
   local a="A"; [ "${2:-}" = lower ] && a="a"
@@ -272,12 +285,19 @@ receipt() {
   local cpu_freed=$1 csec_freed=$2 nclosed=$3
   local cores; cores=$(awk -v c="${cpu_freed:-0}" 'BEGIN{printf "%.1f", c/100}')
   echo
-  echo "${GRN}${BLD}Closed $(count_unit "$nclosed" program).${NC}"
+  echo "${E_PARTY}${GRN}${BLD}Closed $(count_unit "$nclosed" program).${NC}"
   if [ "$(awk -v c="${cores:-0}" 'BEGIN{print (c>=0.2)?1:0}')" = "1" ]; then
     echo "You just got back ${BLD}${cores} of a CPU core${NC} that nothing was using."
   fi
   if [ "${csec_freed:-0}" -ge 600 ]; then
     echo "They had already burned ${BLD}$(burned "$csec_freed")${NC} of processor time."
+  fi
+  # CPU seconds -> phone charges, so the waste is a thing you can hold:
+  # a core flat out ≈ 6W, so csec/3600*6 Wh; a phone battery ≈ 15Wh -> csec/9000.
+  # Rough on purpose, and only shown once it is comfortably past one charge.
+  local charges; charges=$(phone_charges "$csec_freed")
+  if [ "${charges:-0}" -ge 2 ]; then
+    echo "${E_ZAP}The electricity they wasted could have charged your phone ${BLD}about $charges times${NC}."
   fi
   # what it would have cost by tomorrow if left alone
   if [ "$(awk -v c="${cpu_freed:-0}" 'BEGIN{print (c>=20)?1:0}')" = "1" ]; then
@@ -293,14 +313,19 @@ receipt() {
 say_group() {
   local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6
   [ "$owner" = "-" ] && owner=""
+  local ci=${cpu%.*}
+  # one glyph says what kind of problem this is before a word is read:
+  # burning a core, a pile of clones, or just something asleep in the corner
+  local mark="$E_ZZZ"
+  [ "$count" -gt 1 ] && mark="$E_CLONE"
+  [ "${ci:-0}" -ge 20 ] && mark="$E_FIRE"
   local head="$what"
   [ "$count" -gt 1 ] && head="$what ${DIM}× ${count}${NC}"
   if [ -n "$owner" ]; then
-    echo "  ${BLD}${head}${NC} ${DIM}— left by ${owner}${NC}"
+    echo "  ${mark}${BLD}${head}${NC} ${DIM}— left by ${owner}${NC}"
   else
-    echo "  ${BLD}${head}${NC}"
+    echo "  ${mark}${BLD}${head}${NC}"
   fi
-  local ci=${cpu%.*}
   if [ "${ci:-0}" -ge 20 ]; then
     echo "  Eating ${RED}${cpu}%${NC} of a CPU core. Running for $(plain_age "$age")."
   elif [ "$count" -gt 1 ]; then
@@ -407,9 +432,11 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
     echo "${DIM}since ${first_seen}${NC}"
     echo
     printf "  %-26s %8s   %s\n" "APP" "CLOSED" "CPU TIME WASTED"
+    crown="$E_CROWN"   # the table is sorted worst-first, so row one wears it
     while IFS=$'\t' read -r n secs worst app; do
       [ -n "$app" ] || continue
-      printf "  %-26s %8s   %s\n" "$app" "$n" "$(burned "$secs")"
+      printf "  %-26s %8s   %s%s\n" "$app" "$n" "$(burned "$secs")" "$crown"
+      crown=""
     done < <(printf '%s\n' "$BL")
     echo
   fi
@@ -423,14 +450,23 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
   if [ "$MODE" = brag ]; then
     top=$(printf '%s\n' "$BL" | head -1)
     top_app=$(printf '%s' "$top" | cut -f4); top_n=$(printf '%s' "$top" | cut -f1)
+    charges=$(phone_charges "$total_s")
     echo
     echo "  ---------------------------------------------"
-    echo "   my mac was doing $(burned "$total_s") of work"
-    echo "   for programs i never opened."
-    echo
-    echo "   $total_n background programs closed"
+    # older log lines carry no CPU time; "0 seconds of work" is a terrible
+    # brag, so below a minute the card leads with the body count instead
+    if [ "${total_s:-0}" -ge 60 ]; then
+      echo "   🐷 my mac was doing $(burned "$total_s") of work"
+      echo "   for programs i never opened."
+      echo
+      echo "   $total_n background programs closed"
+    else
+      echo "   🐷 caught my mac running $total_n programs"
+      echo "   i never opened. all closed."
+    fi
     [ -n "$top_app" ] && echo "   worst offender: $top_app ($top_n of them)"
     [ "${worst_s:-0}" -gt 3600 ] && echo "   single worst: $(burned "$worst_s") burned by one process"
+    [ "${charges:-0}" -ge 2 ] && echo "   wasted power ≈ $charges phone charges ⚡"
     echo
     echo "   found with machogs"
     echo "   github.com/bnishit/machogs"
@@ -773,7 +809,7 @@ if [ "$HUMAN" -eq 1 ]; then
       receipt "$FREED_CPU" "$FREED_CSEC" "$KILLED"
     else
       echo
-      echo "${GRN}Nothing to close.${NC}"
+      echo "${E_OK}${GRN}Nothing to close.${NC}"
     fi
     if [ "$swap_pct" -gt 80 ]; then
       echo
@@ -790,7 +826,7 @@ if [ "$HUMAN" -eq 1 ]; then
 
   echo
   if [ "${n:-0}" -eq 0 ]; then
-    echo "${GRN}${BLD}Nothing is hogging your Mac.${NC}"
+    echo "${E_OK}${GRN}${BLD}Nothing is hogging your Mac.${NC}"
     echo "No stuck or abandoned programs are running."
     if [ "$swap_pct" -gt 80 ]; then
       echo
@@ -842,13 +878,15 @@ if [ "$HUMAN" -eq 1 ]; then
     hot=$(awk -F'\t' '$5+0 >= 20' "$GRP" | wc -l | tr -d ' ')
 
     if [ "$MODE" = fix ]; then
-      echo "${BLD}Found ${ngroups} thing(s) worth closing.${NC}"
+      echo "${E_BROOM}${BLD}Found $(count_unit "$ngroups" thing) worth closing.${NC}"
       echo "${DIM}I will ask before each one. Nothing closes unless you say yes.${NC}"
+    elif [ "${hot:-0}" -gt 1 ]; then
+      echo "${E_PIG}${BLD}Found the hogs.${NC}"
     elif [ "${hot:-0}" -gt 0 ]; then
-      echo "${BLD}Something is hogging your Mac.${NC}"
+      echo "${E_PIG}${BLD}Found the hog.${NC}"
     else
-      echo "${BLD}Nothing is eating your CPU right now.${NC}"
-      echo "${DIM}But ${n} abandoned program(s) are sitting in memory.${NC}"
+      echo "${E_ZZZ}${BLD}Nothing is eating your CPU right now.${NC}"
+      echo "${DIM}But $(count_unit "$n" "abandoned program") $([ "$n" -eq 1 ] && echo is || echo are) sitting in memory.${NC}"
     fi
     echo
 
