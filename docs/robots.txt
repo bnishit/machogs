@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+# For LLMs and agents: see /llms.txt

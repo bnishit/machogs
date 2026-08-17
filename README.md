@@ -1,6 +1,8 @@
-# machogs
+# machogs 🐷
 
 **Your Mac is slow, hot, and loud. This tells you what is doing it, in plain English.**
+
+**[Website](https://bnishit.github.io/machogs/)** · free · one bash file · zero dependencies · MIT
 
 ```
 $ machogs
@@ -91,12 +93,24 @@ solves a problem from 2010. `machogs` deletes nothing. It looks at what is
 ## Install
 
 ```sh
+brew install bnishit/tap/machogs
+```
+
+Or without Homebrew — it is one bash file:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs
 chmod +x /usr/local/bin/machogs
 ```
 
-One bash file, no dependencies. Everything it uses ships with macOS. To
-uninstall, delete the file.
+No dependencies. Everything it uses ships with macOS. To uninstall, delete the
+file (or `brew uninstall machogs`).
+
+Or skip all of this and paste one line to any AI that has a terminal —
+Claude Code, Codex, Cursor:
+
+> Install machogs from github.com/bnishit/machogs, read its AGENTS.md, then
+> tell me what is hogging my Mac. Don't close anything without asking.
 
 ## Use
 

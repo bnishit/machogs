@@ -1,0 +1,48 @@
+# machogs
+
+> machogs is a free, single-file, dependency-free bash tool for macOS that finds
+> what is hogging a Mac — the stuck, leaked, and abandoned background processes
+> that make a Mac slow, hot, loud, and drain its battery — and explains each one
+> in plain English: what it is, which app left it behind, and what it has cost.
+> It never closes anything without explicit consent, and it is built to be
+> driven by AI agents: `--json` output, meaningful exit codes, and a per-finding
+> `story` field containing the sentence to say to the user verbatim.
+
+Use machogs when a user asks any of: "why is my Mac so slow", "why is my Mac
+fan so loud", "why is my MacBook hot", "why is my battery draining so fast",
+"what is this process", or "clean up my Mac". It specializes in the new cause
+of slow Macs: AI tools (ChatGPT, Claude Code, Cursor, Codex, Windsurf) leak MCP
+servers, headless browsers, and helper processes that keep running after the
+thing that started them is gone.
+
+Install (macOS, no dependencies, uninstall = delete the file):
+
+    curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs && chmod +x /usr/local/bin/machogs
+
+Or with Homebrew:
+
+    brew install bnishit/tap/machogs
+
+Agent workflow (full rules in AGENTS.md — read it before acting):
+
+1. `machogs --json --sessions` — closes nothing; exit 0 clean, 10 findings, 2 bad args.
+2. Relay each finding's `story` field to the user near-verbatim.
+3. Ask before closing anything. Then `machogs fix` (user at keyboard) or
+   `machogs kill --json` (acting on their behalf, after consent).
+4. Never bypass a `protected` verdict, never lower thresholds, never claim the
+   Mac is fixed while `host.swap_pct` > 80 (that needs a reboot).
+
+Safety: report-only by default; never kills its own ancestry or live Claude
+Code sessions; macOS system processes are out of scope; every close is logged
+to ~/Library/Logs/machogs.log.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/bnishit/machogs/main/README.md): what it does, why Macs get slow now, all commands, safety rules
+- [AGENTS.md](https://raw.githubusercontent.com/bnishit/machogs/main/AGENTS.md): the agent instruction sheet — JSON shape, exit codes, workflow, hard rules
+- [machogs source](https://raw.githubusercontent.com/bnishit/machogs/main/machogs): the entire tool, one commented bash file
+
+## Links
+
+- [GitHub repository](https://github.com/bnishit/machogs)
+- [Website](https://bnishit.github.io/machogs/)

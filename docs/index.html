@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>machogs — why is my Mac so slow, hot, and loud? Find what's hogging it</title>
+<meta name="description" content="Your Mac is slow, the fan is loud, the battery drains fast. machogs finds the stuck background process doing it and tells you in plain English — what it is, which app left it, and how to close it safely. Free, one file, no dependencies. Built for AI agents too.">
+<link rel="canonical" href="https://bnishit.github.io/machogs/">
+<meta property="og:title" content="machogs — find out what is hogging your Mac">
+<meta property="og:description" content="Slow, hot, loud fan, battery gone by lunch: usually one stuck program nobody is using. machogs finds it and explains it in plain English. Free, open source, agent-ready.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://bnishit.github.io/machogs/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="machogs — find out what is hogging your Mac">
+<meta name="twitter:description" content="Your Mac is slow, hot, and loud. This tells you what is doing it, in plain English.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐷</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "machogs",
+  "operatingSystem": "macOS",
+  "applicationCategory": "UtilitiesApplication",
+  "description": "Finds the stuck, leaked, and abandoned background processes making a Mac slow, hot, and loud, and explains each one in plain English. Never closes anything without consent. Agent-ready with --json output and AGENTS.md.",
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://github.com/bnishit/machogs"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type": "Question", "name": "Why is my Mac fan so loud?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Almost always one program is stuck using a whole CPU core. The fan is not broken — it is cooling a chip that something is cooking. The program is usually one you never opened, showing up in Activity Monitor as bun, node, or Helper (Renderer). machogs finds it and names the app that left it there."}},
+    {"@type": "Question", "name": "Why is my MacBook so hot?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Same cause as the loud fan: a chip running flat out gets hot, and the metal case passes that heat to your hands. If your Mac is hot while you are only writing an email, something is running that you did not ask for. machogs finds it."}},
+    {"@type": "Question", "name": "Why is my Mac battery draining so fast?",
+     "acceptedAnswer": {"@type": "Answer", "text": "A stuck program never sleeps. It keeps a CPU core awake, which stops your Mac entering its low-power states. The battery estimate drops from nine hours to three and nothing on screen explains why. It is the same problem as the loud fan, arriving through a different door."}},
+    {"@type": "Question", "name": "Why is my Mac suddenly slow?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Two causes: either something is eating the CPU (machogs finds and fixes this), or your Mac has run out of fast memory and is shuffling memory to disk — in which case closing programs barely helps and a restart is the only real fix. machogs checks both and tells you which one you have."}}
+  ]
+}
+</script>
+<style>
+:root{
+  --ink:#171008;
+  --ink2:#211809;
+  --panel:#100b05;
+  --cream:#f4e9d3;
+  --cream-dim:#b3a488;
+  --amber:#ffb454;
+  --pink:#ff9db0;
+  --green:#8ee08e;
+  --red:#ff7a6e;
+  --line:#3a2d17;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --disp:'Bricolage Grotesque',Georgia,serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--ink);
+  color:var(--cream);
+  font-family:var(--mono);
+  font-size:16px;
+  line-height:1.65;
+  overflow-x:hidden;
+}
+/* warm CRT atmosphere: vignette + faint scanlines + grain */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:2;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255,180,84,.055), transparent 55%),
+    radial-gradient(140% 120% at 50% 110%, rgba(255,157,176,.05), transparent 55%);
+}
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:2;opacity:.5;
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px);
+}
+.wrap{max-width:820px;margin:0 auto;padding:0 24px;position:relative;z-index:3}
+a{color:var(--amber)}
+a:hover{color:var(--cream)}
+::selection{background:var(--amber);color:var(--ink)}
+
+/* ---------- hero ---------- */
+header{padding:76px 0 8px}
+.pig{
+  font-size:64px;line-height:1;display:inline-block;
+  filter:drop-shadow(0 6px 24px rgba(255,157,176,.35));
+  animation:snuffle 5s ease-in-out infinite;
+}
+@keyframes snuffle{
+  0%,100%{transform:rotate(-4deg)}
+  40%{transform:rotate(5deg) translateY(-3px)}
+  55%{transform:rotate(3deg)}
+}
+h1{
+  font-family:var(--disp);
+  font-weight:800;
+  font-size:clamp(42px,8.5vw,84px);
+  line-height:.98;
+  letter-spacing:-.02em;
+  margin:18px 0 22px;
+}
+h1 .hot{color:var(--amber)}
+h1 .loud{color:var(--pink)}
+.sub{color:var(--cream-dim);font-size:18px;max-width:56ch}
+.sub b{color:var(--cream);font-weight:600}
+
+/* ---------- terminal ---------- */
+.term{
+  margin:44px 0 12px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:12px;
+  box-shadow:0 30px 70px rgba(0,0,0,.55), 0 0 0 1px rgba(255,180,84,.05) inset;
+  overflow:hidden;
+}
+.term-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:11px 14px;border-bottom:1px solid var(--line);
+  background:linear-gradient(rgba(255,255,255,.025),transparent);
+}
+.dot{width:12px;height:12px;border-radius:50%;background:#4a3b22}
+.dot:nth-child(1){background:#e0665c}.dot:nth-child(2){background:#d8a742}.dot:nth-child(3){background:#71a95c}
+.term-title{margin-left:8px;color:var(--cream-dim);font-size:12.5px}
+.term-body{padding:22px 22px 26px;font-size:14.5px;line-height:1.75;overflow-x:auto}
+.term-body .ln{white-space:pre;display:block;opacity:0;transform:translateY(4px);animation:rise .5s ease forwards}
+.term-body .p{color:var(--cream-dim)}
+.term-body .g{color:var(--green)}
+.term-body .r{color:var(--red)}
+.term-body .y{color:var(--amber)}
+.term-body .k{color:var(--pink)}
+.term-body .b{font-weight:600}
+@keyframes rise{to{opacity:1;transform:none}}
+.caption{color:var(--cream-dim);font-size:14px;margin:14px 2px 0}
+.caption b{color:var(--cream)}
+
+/* ---------- install ---------- */
+.install{margin:64px 0 8px}
+.install h2{margin-bottom:6px}
+.cmd{
+  display:flex;align-items:center;gap:12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:15px 16px;margin:14px 0;overflow-x:auto;
+}
+.cmd code{flex:1;white-space:pre;font-size:13.5px;color:var(--cream)}
+.cmd code .p{color:var(--cream-dim)}
+.copy{
+  font-family:var(--mono);font-size:12.5px;font-weight:600;
+  background:var(--amber);color:var(--ink);border:0;border-radius:7px;
+  padding:7px 13px;cursor:pointer;flex-shrink:0;
+  transition:transform .12s ease, background .12s ease;
+}
+.copy:hover{transform:translateY(-1px)}
+.copy.ok{background:var(--green)}
+.tiny{color:var(--cream-dim);font-size:13.5px}
+
+/* ---------- sections ---------- */
+section{margin:78px 0}
+h2{
+  font-family:var(--disp);font-weight:700;
+  font-size:clamp(26px,4.5vw,38px);letter-spacing:-.015em;
+  line-height:1.15;margin-bottom:16px;
+}
+h2 .tick{color:var(--amber)}
+p{margin:14px 0;max-width:64ch}
+p b{color:var(--amber);font-weight:600}
+.faq h3{
+  font-family:var(--disp);font-weight:700;font-size:22px;
+  margin:38px 0 8px;color:var(--cream);
+}
+.faq h3::before{content:"» ";color:var(--pink)}
+.dim{color:var(--cream-dim)}
+
+/* stat cards */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:26px 0}
+.stat{
+  background:var(--ink2);border:1px solid var(--line);border-radius:10px;
+  padding:18px 18px 15px;
+}
+.stat .n{font-family:var(--disp);font-weight:800;font-size:34px;color:var(--amber);line-height:1}
+.stat .n.pk{color:var(--pink)}
+.stat .n.gr{color:var(--green)}
+.stat .t{color:var(--cream-dim);font-size:13.5px;margin-top:8px;line-height:1.5}
+
+/* agent section */
+.agent{
+  border:1px dashed var(--line);border-radius:14px;
+  padding:30px 28px;background:rgba(255,180,84,.025);
+}
+.agent pre{
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;font-size:13px;line-height:1.7;overflow-x:auto;margin:16px 0;
+  color:var(--cream);
+}
+.agent pre .p{color:var(--cream-dim)}
+.agent pre .y{color:var(--amber)}
+.filegrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.file{
+  border:1px solid var(--line);border-radius:8px;padding:8px 14px;
+  font-size:13px;color:var(--cream);text-decoration:none;background:var(--ink2);
+  transition:border-color .15s ease;
+}
+.file:hover{border-color:var(--amber);color:var(--amber)}
+.file span{color:var(--cream-dim)}
+
+/* safety list */
+.safety li{margin:10px 0 10px 4px;list-style:none;max-width:64ch}
+.safety li::before{content:"✓ ";color:var(--green);font-weight:600}
+
+/* footer */
+footer{
+  margin:90px 0 50px;padding-top:26px;border-top:1px solid var(--line);
+  color:var(--cream-dim);font-size:13.5px;display:flex;flex-wrap:wrap;gap:8px 22px;
+}
+@media (max-width:600px){
+  .term-body{font-size:12px}
+  header{padding-top:52px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="pig" aria-hidden="true">🐷</span>
+  <h1>Your Mac is slow,<br><span class="hot">hot</span>, and <span class="loud">loud</span>.</h1>
+  <p class="sub"><b>machogs</b> finds the program doing it and tells you in plain English —
+  what it is, which app left it behind, and what it has cost you. Then it asks, politely,
+  before closing anything.</p>
+</header>
+
+<div class="term" aria-label="machogs terminal output">
+  <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  <span class="term-title">Terminal — you, just now</span></div>
+  <div class="term-body">
+<span class="ln" style="animation-delay:.2s"><span class="p">$</span> machogs</span>
+<span class="ln" style="animation-delay:.7s"> </span>
+<span class="ln" style="animation-delay:.9s">🐷 <span class="b">Found the hog.</span></span>
+<span class="ln" style="animation-delay:1.3s"> </span>
+<span class="ln" style="animation-delay:1.5s">  🔥 <span class="b">bun</span> <span class="p">— left by a Claude Code plugin</span></span>
+<span class="ln" style="animation-delay:1.8s">  Eating <span class="r">98%</span> of a CPU core. Running for 4 days.</span>
+<span class="ln" style="animation-delay:2.1s">  <span class="p">It is stuck in a loop. Nothing is waiting for it.</span></span>
+<span class="ln" style="animation-delay:2.5s"> </span>
+<span class="ln" style="animation-delay:2.7s"><span class="b">This is why your Mac feels slow, runs hot, spins its fan,</span></span>
+<span class="ln" style="animation-delay:2.8s"><span class="b">and loses battery faster than it should.</span></span>
+<span class="ln" style="animation-delay:3.2s"> </span>
+<span class="ln" style="animation-delay:3.4s">To go through them one at a time:  <span class="y b">machogs fix</span></span>
+<span class="ln" style="animation-delay:3.6s"><span class="p">Nothing is closed unless you say yes.</span></span>
+  </div>
+</div>
+<p class="caption">That one is real. It ran four days at 98% of a CPU core and burned
+<b>91 hours</b> of processor time. Nobody opened it. Nothing on the machine said a word.</p>
+
+<div class="install" id="install">
+  <h2>Install <span class="tick">in ten seconds</span></h2>
+  <p class="tiny">One bash file. No dependencies — everything it uses ships with macOS. Uninstall = delete the file.</p>
+  <div class="cmd">
+    <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs &amp;&amp; chmod +x /usr/local/bin/machogs</code>
+    <button class="copy" data-cmd="curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs &amp;&amp; chmod +x /usr/local/bin/machogs">copy</button>
+  </div>
+  <div class="cmd">
+    <code><span class="p">$</span> brew install bnishit/tap/machogs</code>
+    <button class="copy" data-cmd="brew install bnishit/tap/machogs">copy</button>
+  </div>
+  <p class="tiny">Then just run <b style="color:var(--amber)">machogs</b>. It only looks — it never closes anything on its own.</p>
+</div>
+
+<section class="faq">
+  <h2>The questions you actually typed <span class="tick">to get here</span></h2>
+
+  <h3>Why is my Mac fan so loud?</h3>
+  <p>Almost always: one program is stuck using a whole CPU core. The fan is not broken —
+  it is doing its job, cooling a chip that something is cooking. The hard part is that the
+  program is usually one you never opened and cannot name. In Activity Monitor it shows up
+  as <b>bun</b>, or <b>node</b>, or <b>Helper (Renderer)</b>. Those names tell you nothing,
+  so most people scroll past and reboot instead. machogs names the app that left it there.</p>
+
+  <h3>Why is my MacBook so hot?</h3>
+  <p>Same cause, different symptom. A chip running flat out gets hot, and the metal case
+  passes that heat to your hands. If your Mac is hot while you are only writing an email,
+  something is running that you did not ask for.</p>
+
+  <h3>Why is my battery draining so fast?</h3>
+  <p>A stuck program does not sleep. It keeps a CPU core awake, which stops your Mac from
+  entering its low-power states. The battery estimate drops from nine hours to three, and
+  nothing on screen explains it. Same problem as the loud fan, arriving through a
+  different door.</p>
+
+  <h3>Why is my Mac suddenly slow?</h3>
+  <p>Two different causes, and it is worth knowing which one you have. Either
+  <b>something is eating the CPU</b> — machogs finds this and can fix it — or
+  <b>you have run out of fast memory</b> and your Mac is shuffling memory to disk, in
+  which case closing programs barely helps and machogs will tell you plainly: restart,
+  because nothing else fixes it.</p>
+</section>
+
+<section>
+  <h2>The part that is <span class="tick">new</span></h2>
+  <p>Your Mac used to run the programs you opened. That is no longer true. Today it runs
+  the programs you opened, the helpers those programs started, the AI assistants you gave
+  access to, and the background servers those assistants start so they can search the web
+  and read your files. You did not open any of them. You cannot name them. And they leak.</p>
+  <div class="stats">
+    <div class="stat"><span class="n">28</span><span class="t">duplicate background servers ChatGPT left running in one afternoon, on the machine this was written on</span></div>
+    <div class="stat"><span class="n pk">4 days</span><span class="t">one leaked plugin process ran at 90%+ of a CPU core before anything noticed</span></div>
+    <div class="stat"><span class="n gr">91 hrs</span><span class="t">of processor time it burned — about 36 phone charges of electricity, for nothing</span></div>
+  </div>
+  <p class="dim">Every "clean your Mac" app ever written deletes caches to free disk space.
+  That solves a problem from 2010. machogs deletes nothing — it looks at what is
+  <em>running</em>, and it knows the names of the AI tools that leave things behind.</p>
+</section>
+
+<section class="agent" id="agents">
+  <h2>Built to be driven <span class="tick">by your AI</span></h2>
+  <p>Most people with a hot laptop will not read a shell script. They will ask Claude,
+  ChatGPT, Cursor, or a bot. So machogs speaks agent natively: <b>--json</b> prints one
+  clean object, exit codes carry the verdict (<b>0</b> clean, <b>10</b> look at this,
+  <b>2</b> bad args), and every finding ships a <b>story</b> — the sentence your agent
+  should say to you, already written.</p>
+  <p>Paste this to any agent with a terminal:</p>
+  <pre><span class="p"># tell your AI:</span>
+<span class="y">Install machogs from github.com/bnishit/machogs, read its AGENTS.md,
+then tell me what is hogging my Mac. Don't close anything without asking.</span></pre>
+  <div class="filegrid">
+    <a class="file" href="https://github.com/bnishit/machogs/blob/main/AGENTS.md">AGENTS.md <span>· the instruction sheet</span></a>
+    <a class="file" href="llms.txt">llms.txt <span>· for LLM crawlers</span></a>
+    <a class="file" href="https://github.com/bnishit/machogs">GitHub <span>· one bash file, MIT</span></a>
+  </div>
+</section>
+
+<section>
+  <h2>It will not eat <span class="tick">your homework</span></h2>
+  <ul class="safety">
+    <li><b>Never closes anything on its own.</b> Running <b>machogs</b> only looks. <b>machogs fix</b> asks you about every single item.</li>
+    <li><b>Never closes a coding session.</b> Claude Code sessions and their helpers are listed and skipped — you do not lose unsaved work.</li>
+    <li><b>Only touches your own programs.</b> macOS system processes are out of scope entirely.</li>
+    <li><b>Leaves real work alone</b> — video encoders, backups, Spotlight indexing are exempt.</li>
+    <li><b>Everything is logged</b> to ~/Library/Logs/machogs.log, and <b>machogs blame</b> turns the log into a scoreboard of which app leaks most on <em>your</em> machine. 👑</li>
+  </ul>
+  <p class="tiny">Suspicious? Good. Run <b style="color:var(--amber)">machogs --check</b> — it audits the safety rules and closes nothing.</p>
+</section>
+
+<footer>
+  <span>🐷 machogs</span>
+  <a href="https://github.com/bnishit/machogs">github.com/bnishit/machogs</a>
+  <span>MIT license</span>
+  <span>free forever · one bash file · zero dependencies</span>
+</footer>
+
+</div>
+<script>
+document.querySelectorAll('.copy').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    navigator.clipboard.writeText(btn.dataset.cmd).then(function(){
+      btn.textContent='copied!';btn.classList.add('ok');
+      setTimeout(function(){btn.textContent='copy';btn.classList.remove('ok')},1600);
+    });
+  });
+});
+</script>
+</body>
+</html>
