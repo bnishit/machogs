@@ -559,33 +559,49 @@ struct ArmedPill: View {
     }
 }
 
-// The one problem closing programs cannot fix. Says why in plain words and
-// offers the actual fix, double-confirmed. Shared by popover and Receipts.
+// The one problem closing programs cannot fix. The full card says why in
+// plain words; `compact` is the popover version — one line, one button, the
+// explanation lives in the app window where there's room to read.
 struct SwapCard: View {
     @ObservedObject var engine: Engine
+    var compact = false
+    var moreInfo: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("🌡️").font(.system(size: 20))
+                Text("🌡️").font(.system(size: compact ? 16 : 20))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Out of fast memory.")
                         .font(.system(.callout, design: .rounded).weight(.bold))
                         .foregroundStyle(.white)
-                    Text("\(engine.report?.host.uptime_days ?? 0) days since the last restart")
+                    Text(compact ? "Only a restart truly fixes this."
+                                 : "\(engine.report?.host.uptime_days ?? 0) days since the last restart")
                         .font(.system(.caption2, design: .rounded))
                         .foregroundStyle(.white.opacity(0.75))
                 }
                 Spacer()
+                if compact, let moreInfo {
+                    Button(action: moreInfo) {
+                        Text("Why?")
+                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.14)))
+                    }
+                    .buttonStyle(Squish())
+                }
                 ArmedPill(idle: "Restart now ⏻", armedTitle: "Sure? Everything closes ⏻",
                           tint: .indigo) { engine.restartMac() }
             }
-            Text("Your Mac's fast memory is full, so it is shuffling work to the much slower disk — a desk so buried you're working out of boxes on the floor. That's the slowness you feel, and closing apps barely helps. A restart clears the desk; nothing else does.")
-                .font(.system(.caption, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
+            if !compact {
+                Text("Your Mac's fast memory is full, so it is shuffling work to the much slower disk — a desk so buried you're working out of boxes on the floor. That's the slowness you feel, and closing apps barely helps. A restart clears the desk; nothing else does.")
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(12)
+        .padding(compact ? 10 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12)
@@ -698,11 +714,12 @@ struct MascotPig: View {
     var body: some View {
         PigFace(blink: blink, hovering: hovering, oink: oink, hot: hot)
             .frame(width: 42, height: 42)
-            .scaleEffect(x: breathe ? 1.015 : 0.985, y: breathe ? 0.985 : 1.015)
-            .rotationEffect(.degrees(breathe ? 1.4 : -1.4))
-            .animation(.spring(response: refreshing ? 0.34 : 1.8, dampingFraction: 0.82)
-                .repeatForever(autoreverses: true),
-                       value: breathe)
+            // A hello, then stillness: one springy settle on arrival, then the
+            // pig holds still. A mascot that never stops moving is a
+            // distraction, not a companion — the occasional blink carries
+            // "alive", and the refresh arrow already shows "scanning".
+            .scaleEffect(breathe ? 1 : 0.7)
+            .animation(.spring(response: 0.5, dampingFraction: 0.6), value: breathe)
             .shadow(color: (hot ? Color.orange : Color.pink).opacity(0.28), radius: 7, y: 2)
             .onAppear { breathe = true }
             .task {
@@ -1080,7 +1097,7 @@ struct ContentView: View {
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
                 }
                 if engine.swapTrouble {
-                    SwapCard(engine: engine)
+                    SwapCard(engine: engine, compact: true) { openApp(.now) }
                 }
                 if let receipt = engine.receipt {
                     banner(receipt, colors: [.green, .teal])
@@ -1088,12 +1105,10 @@ struct ContentView: View {
                 }
                 hogs
                     .reveal(appeared, delay: 0.05)
-                sectionBox { ports }
+                doorways
                     .reveal(appeared, delay: 0.1)
-                sectionBox { storage }
-                    .reveal(appeared, delay: 0.15)
                 footer
-                    .reveal(appeared, delay: 0.2)
+                    .reveal(appeared, delay: 0.15)
             }
             .padding(14)
 
@@ -1215,123 +1230,58 @@ struct ContentView: View {
         }
     }
 
-    // MARK: ports
+    // MARK: doorways — ports and storage live in the app window; the popover
+    // just says whether they need you and opens the right page in one click.
 
-    private var ports: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                sectionTitle("🔌", "Ports", tint: .cyan)
-                Spacer()
-                if engine.portsLoading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    ghost(engine.portsReport == nil ? "Check" : "Re-check") { engine.checkPorts() }
-                }
-            }
-            if let p = engine.portsReport {
-                if p.ports.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("✅")
-                        Text("Nothing is listening on any port.")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(.green)
-                    }
-                }
-                // A plain bounded list, killable ports first. (A ScrollView
-                // collapses to zero height in this self-sizing popover.)
-                let ranked = p.ports.sorted {
-                    ($0.killable ? 0 : $0.protected ? 1 : 2, $0.port)
-                        < ($1.killable ? 0 : $1.protected ? 1 : 2, $1.port)
-                }
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(ranked.prefix(7)) { item in
-                        PortRow(item: item) { engine.freePort(item) }
-                            .transition(.asymmetric(
-                                insertion: .opacity,
-                                removal: .move(edge: .trailing).combined(with: .opacity)))
-                    }
-                }
-                if p.ports.count > 7 {
-                    Text("+ \(p.ports.count - 7) more — the Receipts window 📜 lists them all")
+    private var doorways: some View {
+        HStack(spacing: 8) {
+            doorway("🔌", "Ports", detail: portsDetail, page: .ports)
+            doorway("💾", "Storage", detail: storageDetail, page: .storage)
+        }
+    }
+
+    private var portsDetail: String {
+        guard let p = engine.portsReport else { return "who's squatting?" }
+        let n = p.ports.filter(\.killable).count
+        return n == 0 ? "all quiet" : "\(n) to free"
+    }
+
+    private var storageDetail: String {
+        guard let d = engine.diskReport else { return "where did it go?" }
+        let mb = d.items.filter { $0.verdict == "safe" }.reduce(0) { $0 + $1.size_mb }
+        if mb >= 1024 { return String(format: "%.1f GB clearable", Double(mb) / 1024) }
+        return mb >= 128 ? "\(mb) MB clearable" : "\(d.disk.pct)% full"
+    }
+
+    private func doorway(_ emoji: String, _ title: String, detail: String, page: AppPage) -> some View {
+        Button { openApp(page) } label: {
+            HStack(spacing: 7) {
+                Text(emoji).font(.system(size: 14))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.system(.caption, design: .rounded).weight(.bold))
+                    Text(detail)
                         .font(.system(.caption2, design: .rounded))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
-            } else if !engine.portsLoading {
-                Text("\"Port already in use\"? Find out who is squatting it.")
-                    .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
             }
-        }
-    }
-
-    // MARK: storage
-
-    private var storage: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                sectionTitle("💾", "Storage", tint: .teal)
-                Spacer()
-                if engine.diskLoading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    ghost(engine.diskReport == nil ? "Check" : "Re-check") { engine.checkDisk() }
-                }
-            }
-            if let d = engine.diskReport {
-                VStack(alignment: .leading, spacing: 4) {
-                    DiskGauge(pct: d.disk.pct)
-                    Text("\(d.disk.used_gb) GB used of \(d.disk.total_gb) GB (\(d.disk.pct)% full)")
-                        .font(.system(.caption, design: .rounded))
-                        .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                }
-                if d.items.isEmpty {
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("✅")
-                        Text("Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(.green)
-                    }
-                }
-                ForEach(d.items) { item in
-                    DiskRow(item: item,
-                            clearing: engine.clearingPath == item.path,
-                            clear: { engine.clearDisk(item) })
-                        .transition(.asymmetric(
-                            insertion: .opacity,
-                            removal: .move(edge: .trailing).combined(with: .opacity)))
-                }
-                Text("Rebuildable caches get a Clear button. Everything else: it points; you decide.")
-                    .font(.system(.caption2, design: .rounded)).foregroundStyle(.tertiary)
-            } else if !engine.diskLoading {
-                Text("Where did your storage go? Takes ~15 seconds.")
-                    .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: shared pieces
-
-    private func sectionBox<V: View>(@ViewBuilder _ content: () -> V) -> some View {
-        content()
-            .padding(12)
+            .padding(.horizontal, 11).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.primary.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
-            )
+            .background(RoundedRectangle(cornerRadius: 11).fill(Color.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+        }
+        .buttonStyle(Squish())
+        .modifier(HoverLift())
     }
 
-    private func sectionTitle(_ emoji: String, _ title: String, tint: Color) -> some View {
-        HStack(spacing: 7) {
-            Text(emoji)
-                .font(.system(size: 13))
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(tint.opacity(0.14)))
-            Text(title).font(.system(.subheadline, design: .rounded).weight(.bold))
-        }
+    private func openApp(_ page: AppPage) {
+        UserDefaults.standard.set(page.rawValue, forKey: "appPage")
+        openWindow(id: "story")
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func banner(_ text: String, colors: [Color]) -> some View {
@@ -1422,13 +1372,12 @@ struct MachogsApp: App {
         .menuBarExtraStyle(.window)
 
         // `open machogs://receipts` lands here — the popover button, agents,
-        // and the CLI can all summon the scoreboard.
-        Window("The Receipts", id: "story") {
+        // and the CLI can all summon the app window.
+        Window("Machogs", id: "story") {
             StoryView(engine: engine)
                 .onAppear { NSApp.activate(ignoringOtherApps: true) }
         }
-        .defaultSize(width: 660, height: 640)
-        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 860, height: 620)
         .handlesExternalEvents(matching: ["receipts"])
 
         // `machogs://bust` lands here — the reveal for a watchdog catch, opened

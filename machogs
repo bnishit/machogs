@@ -618,6 +618,31 @@ if [ "$PORTS" -eq 1 ]; then
     esac
   }
 
+  # Services are whack-a-mole: kill one and launchd respawns it in a second,
+  # so offering a kill would be lying. Detect them and say how to stop them
+  # for real instead. pid → launchd label via `launchctl list`; Homebrew
+  # services also betray themselves by living in the Cellar.
+  LAUNCHD_TBL=$(launchctl list 2>/dev/null | awk 'NR>1 && $1+0>0 {print $1 "\t" $3}')
+  service_note() {
+    local pid=$1 label path formula
+    label=$(printf '%s\n' "$LAUNCHD_TBL" | awk -F'\t' -v p="$pid" '$1==p {print $2; exit}')
+    if [ -n "$label" ]; then
+      case "$label" in
+        homebrew.mxcl.*)
+          echo "a Homebrew service — killing it just respawns it. Stop it for real: brew services stop ${label#homebrew.mxcl.}" ;;
+        *)
+          echo "a background service ($label) — killing it just respawns it. Stop: launchctl bootout gui/$(id -u)/$label" ;;
+      esac
+      return
+    fi
+    path=$(ps -o comm= -p "$pid" 2>/dev/null)
+    case "$path" in
+      */Cellar/*)
+        formula=$(printf '%s' "$path" | sed 's|.*/Cellar/||; s|/.*||')
+        echo "part of Homebrew's $formula service — it tends to come back if killed. Try: brew services stop $formula" ;;
+    esac
+  }
+
   # lsof -F: p=pid, c=command, n=name — survives commands with spaces.
   TBLP=$(lsof -nP -iTCP -sTCP:LISTEN -Fpcn 2>/dev/null | awk '
     /^p/ { pid=substr($0,2) }
@@ -650,6 +675,7 @@ if [ "$PORTS" -eq 1 ]; then
     age=$(plain_age "$(etime_of "$pid")")
     cwd=$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}' | sed "s|^$HOME|~|")
     o=$(whose "$pid"); note=$(port_note "$cmd")
+    [ -z "$note" ] && note=$(service_note "$pid")
     sys=0; [ "$uid" != "$ME_UID" ] && sys=1
     prot=0; protected "$pid" && prot=1
 

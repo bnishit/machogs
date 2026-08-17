@@ -1,16 +1,21 @@
-// The Receipts — machogs' full-window scoreboard.
+// The Machogs window — a real macOS app, not a feed.
 //
-// The popover is the 10-second surface; this is the dwell surface. It reads
-// ~/Library/Logs/machogs.log (the same file the CLI writes) and turns weeks
-// of closes into a story: hero totals, a Hall of Shame leaderboard, a
-// two-week activity chart, and a one-click brag card. Read-only over the log;
-// it closes nothing and deletes nothing.
+// A sidebar of places, one purpose per screen:
+//   Now       — is my Mac okay, and what needs closing this minute
+//   Ports     — every listening port, grouped by what you may do about it
+//   Storage   — where the disk went, with safe caches clearable in place
+//   Receipts  — the scoreboard: totals, Hall of Shame, two-week chart, brag
+//   Settings  — the switches, plus a preview of the island for the curious
+//
+// The popover stays the 10-second surface; this is the app. It opens via
+// `open machogs://receipts` or 📜 in the popover.
 
 import SwiftUI
 import AppKit
 import Charts
+import ServiceManagement
 
-// MARK: - Log parsing
+// MARK: - Log parsing (the receipts data)
 
 struct CloseEvent {
     let date: Date
@@ -43,7 +48,6 @@ struct Story {
     var totalCloses: Int { events.count }
     var totalCPUSeconds: Int { events.reduce(0) { $0 + $1.cpuSeconds } }
     var phoneCharges: Int { totalCPUSeconds / 9000 }
-    var worstSingle: CloseEvent? { events.max { $0.cpuSeconds < $1.cpuSeconds } }
 
     static func load() -> Story {
         let path = NSString(string: "~/Library/Logs/machogs.log").expandingTildeInPath
@@ -83,7 +87,7 @@ struct Story {
     }
 }
 
-// MARK: - Pieces
+// MARK: - Shared pieces
 
 // Numbers that roll up from zero when they land on screen.
 struct CountUp: View, Animatable {
@@ -130,106 +134,284 @@ struct StatCard: View {
     }
 }
 
-// MARK: - The window
+// A section slab — every page builds out of these.
+struct Slab<Content: View>: View {
+    let title: String
+    let caption: String?
+    @ViewBuilder let content: Content
+
+    init(_ title: String, caption: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.caption = caption
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !title.isEmpty {
+                Text(title)
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+            }
+            if let caption {
+                Text(caption)
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+    }
+}
+
+// MARK: - The window: sidebar + pages
+
+enum AppPage: String, CaseIterable, Identifiable {
+    case now, ports, storage, receipts, settings
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .now: return "Now"
+        case .ports: return "Ports"
+        case .storage: return "Storage"
+        case .receipts: return "The Receipts"
+        case .settings: return "Settings"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .now: return "gauge.with.needle"
+        case .ports: return "cable.connector"
+        case .storage: return "internaldrive"
+        case .receipts: return "trophy"
+        case .settings: return "gearshape"
+        }
+    }
+}
 
 struct StoryView: View {
     @ObservedObject var engine: Engine
+    // Persisted so the popover doorways can open the window on a chosen page.
+    @AppStorage("appPage") private var pageRaw = AppPage.now.rawValue
     @State private var story = Story.load()
-    @State private var appeared = false
-    @State private var bragCopied = false
+
+    private var page: AppPage { AppPage(rawValue: pageRaw) ?? .now }
+    private var pageSelection: Binding<AppPage> {
+        Binding(get: { AppPage(rawValue: pageRaw) ?? .now },
+                set: { pageRaw = $0.rawValue })
+    }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // A soft warm wash at the top so the window has weather, not just walls.
-            LinearGradient(colors: [Color.pink.opacity(0.10), Color.orange.opacity(0.04), .clear],
-                           startPoint: .top, endPoint: .center)
-                .ignoresSafeArea()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header.reveal(appeared, delay: 0)
-                    liveNow.reveal(appeared, delay: 0.04)
-                    if story.events.isEmpty {
-                        emptyState.reveal(appeared, delay: 0.08)
-                    } else {
-                        heroRow.reveal(appeared, delay: 0.08)
-                        hallOfShame.reveal(appeared, delay: 0.12)
-                        activity.reveal(appeared, delay: 0.16)
-                        bragRow.reveal(appeared, delay: 0.2)
-                    }
-                    footer.reveal(appeared, delay: 0.25)
+        NavigationSplitView {
+            List(selection: pageSelection) {
+                ForEach(AppPage.allCases) { p in
+                    Label(p.label, systemImage: p.symbol)
+                        .badge(badge(for: p))
+                        .tag(p)
                 }
-                .padding(22)
-                .padding(.top, 14)   // clear the floating traffic lights
             }
-
-            ConfettiBurst(trigger: engine.celebrate)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 185, max: 220)
+            .safeAreaInset(edge: .bottom) {
+                // The mascot lives at the bottom of the sidebar, being a pig.
+                VStack(spacing: 4) {
+                    MascotPig(hot: engine.hot, refreshing: engine.refreshing)
+                    Text("machogs")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 10)
+            }
+        } detail: {
+            detailPage
+                .navigationTitle(page.label)
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            engine.refresh(); engine.checkPorts(); engine.checkDisk()
+                            story = Story.load()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .help("Check everything again")
+                    }
+                }
         }
-        .frame(minWidth: 620, minHeight: 560)
+        .frame(minWidth: 780, minHeight: 560)
+        .overlay(ConfettiBurst(trigger: engine.celebrate))
         .onAppear {
             story = Story.load()
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appeared = true }
-            // The window is a command center, not just a scoreboard: load the
-            // live picture (ports are instant; the disk scan takes ~15s).
             if engine.portsReport == nil { engine.checkPorts() }
             if engine.diskReport == nil { engine.checkDisk() }
         }
-        // Closing things bumps the log; keep the scoreboard in sync.
         .onChange(of: engine.celebrate) { _ in story = Story.load() }
     }
 
-    // MARK: - Right now: everything the popover can do, in the big window.
+    // Sidebar badges carry the "does anything need me?" answer.
+    private func badge(for p: AppPage) -> Int {
+        switch p {
+        case .now: return engine.groups.reduce(0) { $0 + $1.count } + (engine.swapTrouble ? 1 : 0)
+        case .ports: return engine.portsReport?.ports.filter(\.killable).count ?? 0
+        case .storage: return engine.diskReport?.items.filter { $0.verdict == "safe" }.count ?? 0
+        default: return 0
+        }
+    }
 
-    private var liveNow: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Circle().fill(engine.clean && !engine.swapTrouble ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text("Right now")
-                    .font(.system(.title3, design: .rounded).weight(.bold))
-                Spacer()
-                if engine.refreshing || engine.portsLoading || engine.diskLoading {
-                    ProgressView().controlSize(.small)
+    @ViewBuilder
+    private var detailPage: some View {
+        switch page {
+        case .now: NowPage(engine: engine)
+        case .ports: PortsPage(engine: engine)
+        case .storage: StoragePage(engine: engine)
+        case .receipts: ReceiptsPage(engine: engine, story: story)
+        case .settings: SettingsPage(engine: engine)
+        }
+    }
+}
+
+// MARK: - Now
+
+struct NowPage: View {
+    @ObservedObject var engine: Engine
+    @State private var appeared = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                verdict.reveal(appeared, delay: 0)
+                vitals.reveal(appeared, delay: 0.04)
+
+                if let receipt = engine.receipt {
+                    Text(receipt)
+                        .font(.system(.callout, design: .rounded).weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 12)
+                            .fill(LinearGradient(colors: [.green.opacity(0.9), .teal.opacity(0.9)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing)))
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
-                Button {
-                    engine.refresh(); engine.checkPorts(); engine.checkDisk()
-                } label: {
-                    Text("Re-check")
-                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                        .padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(Capsule().fill(Color.primary.opacity(0.07)))
+
+                if engine.swapTrouble {
+                    SwapCard(engine: engine).reveal(appeared, delay: 0.08)
                 }
-                .buttonStyle(Squish())
+
+                hogs.reveal(appeared, delay: 0.12)
             }
+            .padding(18)
+        }
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { appeared = true }
+        }
+    }
 
-            if engine.swapTrouble { SwapCard(engine: engine) }
-
-            if let receipt = engine.receipt {
-                Text(receipt)
-                    .font(.system(.callout, design: .rounded).weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 12)
-                        .fill(LinearGradient(colors: [.green.opacity(0.9), .teal.opacity(0.9)],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing)))
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+    // The one-line answer, biggest thing on the page.
+    private var verdict: some View {
+        HStack(spacing: 12) {
+            Text(engine.hot ? "🔥" : engine.clean && !engine.swapTrouble ? "✨" : "🧹")
+                .font(.system(size: 34))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headline)
+                    .font(.system(size: 24, weight: .heavy, design: .rounded))
+                Text(subline)
+                    .font(.system(.callout, design: .rounded))
+                    .foregroundStyle(.secondary)
             }
+            Spacer()
+        }
+    }
 
-            if engine.groups.isEmpty {
-                HStack(spacing: 6) {
-                    Text("✨")
-                    Text("Nothing is hogging your Mac right now.")
-                        .font(.system(.callout, design: .rounded).weight(.semibold))
-                        .foregroundStyle(.green)
-                }
-            } else {
-                if engine.groups.count > 1 {
-                    HStack {
-                        Text("\(engine.groups.reduce(0) { $0 + $1.count }) things worth closing")
+    private var headline: String {
+        if engine.hot { return "Found the hog." }
+        if engine.swapTrouble { return "Out of fast memory." }
+        if engine.clean { return "Your Mac is fine." }
+        return "Leftovers found."
+    }
+    private var subline: String {
+        if engine.hot { return "Something is cooking your CPU right now." }
+        if engine.swapTrouble { return "Programs are fine — the memory is the problem. See below." }
+        if engine.clean { return "Nothing stuck, nothing abandoned, nothing cooking." }
+        return "Idle junk is holding memory. Close it whenever."
+    }
+
+    // The vitals strip: four numbers that say how the machine actually is.
+    private var vitals: some View {
+        HStack(spacing: 10) {
+            vital("cpu", "CPU load",
+                  value: String(format: "%.1f", engine.report?.host.load ?? 0),
+                  detail: "of \(engine.report?.host.cores ?? 0) cores",
+                  bad: (engine.report?.host.load ?? 0) > Double(engine.report?.host.cores ?? 1))
+            vital("memorychip", "Fast memory",
+                  value: "\(engine.report?.host.swap_pct ?? 0)%",
+                  detail: "swap used",
+                  bad: engine.swapTrouble)
+            vital("clock", "Uptime",
+                  value: "\(engine.report?.host.uptime_days ?? 0)d",
+                  detail: "since restart",
+                  bad: (engine.report?.host.uptime_days ?? 0) >= 14)
+            vital("internaldrive", "Disk",
+                  value: engine.diskReport.map { "\($0.disk.pct)%" } ?? "…",
+                  detail: "full",
+                  bad: (engine.diskReport?.disk.pct ?? 0) >= 90)
+        }
+    }
+
+    private func vital(_ symbol: String, _ title: String, value: String, detail: String, bad: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(bad ? Color.orange : Color.secondary)
+                Text(title)
+                    .font(.system(.caption2, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(.system(.title3, design: .rounded).weight(.heavy))
+                    .monospacedDigit()
+                    .foregroundStyle(bad ? Color.orange : Color.primary)
+                Text(detail)
+                    .font(.system(.caption2, design: .rounded))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 11).fill(Color.primary.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 11)
+            .strokeBorder(bad ? Color.orange.opacity(0.4) : Color.primary.opacity(0.07), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var hogs: some View {
+        if engine.groups.isEmpty {
+            Slab("", caption: nil) {
+                HStack(spacing: 10) {
+                    Text("✨").font(.system(size: 22))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Nothing worth closing.")
+                            .font(.system(.callout, design: .rounded).weight(.semibold))
+                            .foregroundStyle(.green)
+                        Text("No stuck or abandoned programs anywhere. The pig keeps watching.")
                             .font(.system(.caption, design: .rounded))
                             .foregroundStyle(.secondary)
-                        Spacer()
+                    }
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("\(engine.groups.reduce(0) { $0 + $1.count }) thing\(engine.groups.reduce(0) { $0 + $1.count } == 1 ? "" : "s") worth closing")
+                        .font(.system(.headline, design: .rounded).weight(.bold))
+                    Spacer()
+                    if engine.groups.count > 1 {
                         pill("Close everything 🧹", tint: .pink) { engine.closeAll() }
                     }
                 }
@@ -240,73 +422,170 @@ struct StoryView: View {
                             removal: .scale(scale: 0.8).combined(with: .opacity)))
                 }
             }
-
-            HStack(alignment: .top, spacing: 14) {
-                // Ports — instant answer to "who's on 3000?"
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("🔌 Ports")
-                        .font(.system(.callout, design: .rounded).weight(.bold))
-                    if let p = engine.portsReport {
-                        if p.ports.isEmpty {
-                            Text("Nothing is listening.")
-                                .font(.system(.caption, design: .rounded))
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(p.ports) { item in
-                            PortRow(item: item) { engine.freePort(item) }
-                                .transition(.asymmetric(
-                                    insertion: .opacity,
-                                    removal: .move(edge: .trailing).combined(with: .opacity)))
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Storage — safe caches clear right here.
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("💾 Storage")
-                        .font(.system(.callout, design: .rounded).weight(.bold))
-                    if let d = engine.diskReport {
-                        if d.items.isEmpty {
-                            Text("Junk spots are clean — the disk is your real files.")
-                                .font(.system(.caption, design: .rounded))
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(d.items) { item in
-                            DiskRow(item: item,
-                                    clearing: engine.clearingPath == item.path,
-                                    clear: { engine.clearDisk(item) })
-                                .transition(.asymmetric(
-                                    insertion: .opacity,
-                                    removal: .move(edge: .trailing).combined(with: .opacity)))
-                        }
-                    } else if engine.diskLoading {
-                        Text("Weighing the junk spots…")
-                            .font(.system(.caption, design: .rounded))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
-        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
+    }
+}
+
+// MARK: - Ports
+
+struct PortsPage: View {
+    @ObservedObject var engine: Engine
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if engine.portsLoading && engine.portsReport == nil {
+                    ProgressView("Checking every listening port…")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 40)
+                } else if let p = engine.portsReport {
+                    if p.ports.isEmpty {
+                        Slab("") {
+                            Text("✅ Nothing is listening on any port.")
+                                .font(.system(.callout, design: .rounded).weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
+                    } else {
+                        let killable = p.ports.filter(\.killable)
+                        let sessions = p.ports.filter(\.protected)
+                        let system = p.ports.filter { !$0.killable && !$0.protected }
+                        if !killable.isEmpty {
+                            Slab("Yours to free", caption: "Nothing here belongs to a live coding session — freeing one costs you nothing unsaved.") {
+                                rows(killable)
+                            }
+                        }
+                        if !sessions.isEmpty {
+                            Slab("Your live sessions", caption: "These belong to coding sessions that are open right now. machogs never touches them.") {
+                                rows(sessions)
+                            }
+                        }
+                        if !system.isEmpty {
+                            Slab("macOS and squatters", caption: "System daemons, and squatters that killing does not fix — machogs names them instead.") {
+                                rows(system)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(18)
+        }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            MascotPig(hot: false, refreshing: false)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("The Receipts")
-                    .font(.system(size: 26, weight: .heavy, design: .rounded))
-                Text(sinceText)
-                    .font(.system(.callout, design: .rounded))
-                    .foregroundStyle(.secondary)
+    private func rows(_ items: [PortItem]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items) { item in
+                PortRow(item: item) { engine.freePort(item) }
+                    .transition(.asymmetric(
+                        insertion: .opacity,
+                        removal: .move(edge: .trailing).combined(with: .opacity)))
             }
-            Spacer()
+        }
+    }
+}
+
+// MARK: - Storage
+
+struct StoragePage: View {
+    @ObservedObject var engine: Engine
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if engine.diskLoading && engine.diskReport == nil {
+                    ProgressView("Weighing the usual junk spots… takes ~15 seconds.")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 40)
+                } else if let d = engine.diskReport {
+                    Slab("") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            DiskGauge(pct: d.disk.pct)
+                            HStack {
+                                Text("\(d.disk.used_gb) GB used of \(d.disk.total_gb) GB (\(d.disk.pct)% full)")
+                                    .font(.system(.callout, design: .rounded).weight(.semibold))
+                                    .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+                                Spacer()
+                                let reclaimable = d.items.filter { $0.verdict == "safe" }.reduce(0) { $0 + $1.size_mb }
+                                if reclaimable >= 512 {
+                                    chip("~\(reclaimable >= 10240 ? "\(reclaimable / 1024) GB" : String(format: "%.1f GB", Double(reclaimable) / 1024)) safely clearable", .teal)
+                                }
+                            }
+                        }
+                    }
+                    if d.items.isEmpty {
+                        Slab("") {
+                            Text("✅ Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
+                                .font(.system(.callout, design: .rounded).weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
+                    } else {
+                        Slab("The junk spots", caption: "Rebuildable caches get a Clear button — two taps, and the engine refuses anything not on its own safe list. Everything else: it points, you decide.") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(d.items) { item in
+                                    DiskRow(item: item,
+                                            clearing: engine.clearingPath == item.path,
+                                            clear: { engine.clearDisk(item) })
+                                        .transition(.asymmetric(
+                                            insertion: .opacity,
+                                            removal: .move(edge: .trailing).combined(with: .opacity)))
+                                }
+                            }
+                        }
+                    }
+                    if let receipt = engine.receipt, receipt.hasPrefix("💾") {
+                        Text(receipt)
+                            .font(.system(.callout, design: .rounded).weight(.medium))
+                            .foregroundStyle(.white)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 12)
+                                .fill(LinearGradient(colors: [.green.opacity(0.9), .teal.opacity(0.9)],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing)))
+                            .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
+    }
+}
+
+// MARK: - The Receipts (scoreboard)
+
+struct ReceiptsPage: View {
+    @ObservedObject var engine: Engine
+    let story: Story
+    @State private var appeared = false
+    @State private var bragCopied = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if story.events.isEmpty {
+                    emptyState
+                } else {
+                    Text(sinceText)
+                        .font(.system(.callout, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    heroRow.reveal(appeared, delay: 0.02)
+                    hallOfShame.reveal(appeared, delay: 0.06)
+                    activity.reveal(appeared, delay: 0.10)
+                    bragRow.reveal(appeared, delay: 0.14)
+                }
+                HStack {
+                    Spacer()
+                    Text("caught in 4k by machogs · github.com/bnishit/machogs")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            }
+            .padding(18)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { appeared = true }
         }
     }
 
@@ -348,21 +627,12 @@ struct StoryView: View {
         let ranked = heavyBurn ? story.byApp : story.byApp.sorted { $0.closes > $1.closes }
         let maxSecs = max(1, ranked.map(\.cpuSeconds).max() ?? 1)
         let maxCloses = max(1, ranked.map(\.closes).max() ?? 1)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("🏆 Hall of Shame")
-                .font(.system(.title3, design: .rounded).weight(.bold))
-            Text("Who leaves the most junk running on this Mac.")
-                .font(.system(.caption, design: .rounded))
-                .foregroundStyle(.secondary)
+        return Slab("🏆 Hall of Shame", caption: "Who leaves the most junk running on this Mac.") {
             ForEach(Array(ranked.prefix(6).enumerated()), id: \.element.id) { rank, app in
                 shameRow(rank: rank, app: app, heavyBurn: heavyBurn,
                          maxSecs: maxSecs, maxCloses: maxCloses)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
     }
 
     private func shameRow(rank: Int, app: AppScore, heavyBurn: Bool, maxSecs: Int, maxCloses: Int) -> some View {
@@ -405,9 +675,7 @@ struct StoryView: View {
     }
 
     private var activity: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("📈 The last two weeks")
-                .font(.system(.title3, design: .rounded).weight(.bold))
+        Slab("📈 The last two weeks", caption: "Programs caught per day. Quiet days mean your Mac behaved.") {
             Chart(story.days) { d in
                 BarMark(x: .value("Day", d.label), y: .value("Closed", d.count))
                     .foregroundStyle(LinearGradient(colors: [.pink, .orange],
@@ -418,14 +686,7 @@ struct StoryView: View {
                 AxisMarks(values: .automatic(desiredCount: 3))
             }
             .frame(height: 110)
-            Text("Programs caught per day. Quiet days mean your Mac behaved.")
-                .font(.system(.caption, design: .rounded))
-                .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
     }
 
     private var bragRow: some View {
@@ -467,7 +728,7 @@ struct StoryView: View {
                 .font(.system(size: 44))
             Text("No receipts yet.")
                 .font(.system(.title3, design: .rounded).weight(.bold))
-            Text("Close your first hog from the menu bar and this page starts keeping score.")
+            Text("Close your first hog from Now or the menu bar and this page starts keeping score.")
                 .font(.system(.callout, design: .rounded))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -475,14 +736,86 @@ struct StoryView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
     }
+}
 
-    private var footer: some View {
-        HStack {
-            Spacer()
-            Text("caught in 4k by machogs · github.com/bnishit/machogs")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.tertiary)
-            Spacer()
+// MARK: - Settings
+
+struct SettingsPage: View {
+    @ObservedObject var engine: Engine
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @AppStorage("soundOn") private var soundOn = true
+    @AppStorage("watchdogOn") private var watchdogOn = true
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Slab("The watchdog", caption: "The pig checks every minute. When something starts cooking your CPU, an AI session leaves a mess behind, or one app clones itself past reason, it taps your shoulder — once, with a cooldown, never a nag.") {
+                    Toggle("Shoulder taps (the island + notifications)", isOn: $watchdogOn)
+                        .toggleStyle(.switch)
+                        .font(.system(.callout, design: .rounded))
+                    HStack {
+                        Text("See what a catch looks like:")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        pill("Preview the island 📸", tint: .indigo) {
+                            Island.shared.show(
+                                BustEvent(kind: .hot,
+                                          headline: "Caught the hog",
+                                          subline: "Just a preview — nothing is actually wrong.",
+                                          keys: []),
+                                engine: engine)
+                        }
+                    }
+                }
+
+                Slab("The app") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Start at login", isOn: $launchAtLogin)
+                            .toggleStyle(.switch)
+                            .font(.system(.callout, design: .rounded))
+                            .onChange(of: launchAtLogin) { on in
+                                do {
+                                    if on { try SMAppService.mainApp.register() }
+                                    else { try SMAppService.mainApp.unregister() }
+                                } catch {
+                                    launchAtLogin = SMAppService.mainApp.status == .enabled
+                                }
+                            }
+                        Toggle("Sounds and haptics", isOn: $soundOn)
+                            .toggleStyle(.switch)
+                            .font(.system(.callout, design: .rounded))
+                            .onChange(of: soundOn) { on in if on { Sfx.pop() } }
+                    }
+                }
+
+                Slab("The promises", caption: nil) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        promise("It never closes anything on its own — every close is your click.")
+                        promise("It never touches a live coding session or macOS itself.")
+                        promise("The only deleting it does is caches from its own safe list, on your two taps.")
+                        promise("Every close is logged — that log is The Receipts.")
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Text("machogs \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · MIT · github.com/bnishit/machogs")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            }
+            .padding(18)
+        }
+    }
+
+    private func promise(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("🤝").font(.system(size: 12))
+            Text(text)
+                .font(.system(.caption, design: .rounded))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
