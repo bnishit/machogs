@@ -126,6 +126,13 @@ All read-only; none touch processes or files.
   backups, Xcode junk, Trash, Downloads) with a `verdict` per item: `safe`,
   `check`, or `yours`. It DELETES NOTHING and neither should you — relay the
   `how` field and let the user do the deleting themselves. Takes ~15s.
+- `machogs ports` / `machogs port <n>` (both take `--json`) — who is squatting
+  which port; the answer to "port 3000 already in use". `machogs port <n> kill`
+  frees a port, with the usual refusals: `system: true` and noted launchd
+  squatters (AirPlay's ControlCenter on 5000/7000 — relay the `note`, killing
+  it does not stick) are never killed, `protected: true` means a live Claude
+  Code session holds it — tell the user to quit it there. Ask before freeing
+  a port, same as every other kill.
 
 The log they read is `~/Library/Logs/machogs.log`, one tab-separated line per
 close: time, pid, app to blame, what it was, CPU%, CPU seconds.

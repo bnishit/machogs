@@ -44,7 +44,9 @@
     {"@type": "Question", "name": "Why is my Mac suddenly slow?",
      "acceptedAnswer": {"@type": "Answer", "text": "Two causes: either something is eating the CPU (machogs finds and fixes this), or your Mac has run out of fast memory and is shuffling memory to disk — in which case closing programs barely helps and a restart is the only real fix. machogs checks both and tells you which one you have."}},
     {"@type": "Question", "name": "Why is my Mac storage full?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Usually dead weight in predictable places: app caches, Docker's disk image, old iPhone backups, Xcode build junk, npm caches, the Trash, and Downloads. machogs disk measures the usual junk spots, tells you in plain English which are safe to clear and how, and deletes nothing itself — you decide."}}
+     "acceptedAnswer": {"@type": "Answer", "text": "Usually dead weight in predictable places: app caches, Docker's disk image, old iPhone backups, Xcode build junk, npm caches, the Trash, and Downloads. machogs disk measures the usual junk spots, tells you in plain English which are safe to clear and how, and deletes nothing itself — you decide."}},
+    {"@type": "Question", "name": "Port 3000 is already in use — what is using it and how do I free it?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Run machogs port 3000 to see exactly who holds the port, which project folder it was started in, and how long it has been running. Add kill to free it. machogs ports lists every listening port. It also explains the famous squatters: macOS's AirPlay Receiver holds ports 5000 and 7000 — killing it does not stick, so machogs points you at the System Settings toggle instead."}}
   ]
 }
 </script>
@@ -343,6 +345,13 @@ Caught in 4K.</p>
   old iPhone backups, Xcode build junk, npm caches, the Trash, Downloads.
   <b>machogs disk</b> is the storage X-ray — it measures the usual junk spots and tells
   you which are safe to clear and how. It deletes nothing itself. It points; you decide.</p>
+
+  <h3>"Port 3000 is already in use" — by what??</h3>
+  <p>The error every dev knows, and it never says who. <b>machogs port 3000</b> tells you
+  exactly who is squatting it, in which project folder, for how long — and
+  <b>machogs port 3000 kill</b> frees it. It also knows the famous one: macOS's own
+  <b>AirPlay Receiver</b> sits on ports 5000 and 7000, killing it doesn't stick, and
+  machogs points you at the setting that actually turns it off.</p>
 </section>
 
 <section>

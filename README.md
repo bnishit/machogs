@@ -121,6 +121,28 @@ it says the honest thing: the space is going to your real files.
 
 ---
 
+## Port 3000 is already in use — by what?
+
+The error every dev knows, and it never says WHO. Now it does:
+
+```
+$ machogs port 3000
+
+  :3000  node in ~/dev/my-app — running 3 hours
+
+Free it:  machogs port 3000 kill
+```
+
+`machogs ports` lists everything listening, in plain words — including the
+two famous squatters people google for hours: macOS's own AirPlay Receiver
+sitting on ports 5000 and 7000 (machogs names it and points at the setting
+that turns it off, because killing it does not stick), and `rapportd`, which
+is harmless and should be left alone. The same safety rules apply: it will
+name a system process rather than kill it, and it will never kill a server
+belonging to a live Claude Code session — it tells you to quit it there.
+
+---
+
 ## Install
 
 ```sh
@@ -151,6 +173,8 @@ machogs fix          # go through them one at a time, asking before each
 machogs blame        # scoreboard: which app leaves the most junk behind
 machogs brag         # a shareable card of what your Mac has been wasting
 machogs disk         # where your storage went. Deletes nothing.
+machogs ports        # every port in use and who is squatting it
+machogs port 3000    # who holds port 3000; add `kill` to free it
 machogs --details    # the technical report, by category
 machogs --json       # machine-readable, for agents
 machogs --check      # audit the safety rules, close nothing

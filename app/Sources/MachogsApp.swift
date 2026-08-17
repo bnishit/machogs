@@ -84,6 +84,28 @@ struct DiskReport: Codable {
     let items: [DiskItem]
 }
 
+// `machogs ports --json` — who is squatting which port.
+struct PortItem: Codable, Identifiable {
+    let port: Int
+    let pid: Int
+    let process: String
+    let owner: String
+    let cwd: String
+    let age: String
+    let system: Bool
+    let protected: Bool
+    let note: String
+    var id: String { "\(port):\(pid)" }
+    // System daemons and launchd-resurrected squatters aren't worth killing;
+    // protected pids belong to a live coding session.
+    var killable: Bool { !system && !protected && note.isEmpty }
+}
+
+struct PortsReport: Codable {
+    let mode: String
+    let ports: [PortItem]
+}
+
 // One card in the UI = one identical story, however many pids share it.
 struct FindingGroup: Identifiable {
     let story: String
@@ -106,6 +128,8 @@ final class Engine: ObservableObject {
     @Published var refreshing = false
     @Published var diskReport: DiskReport?
     @Published var diskLoading = false
+    @Published var portsReport: PortsReport?
+    @Published var portsLoading = false
 
     private var timer: Timer?
     private var started = false
@@ -202,6 +226,29 @@ final class Engine: ObservableObject {
         }
     }
 
+    func checkPorts() {
+        guard !portsLoading else { return }
+        portsLoading = true
+        Task.detached(priority: .utility) {
+            let result = Self.runJSON(["ports", "--json"], as: PortsReport.self)
+            await MainActor.run {
+                self.portsLoading = false
+                switch result {
+                case .success(let p): self.portsReport = p
+                case .failure(let e): self.errorText = e.message
+                }
+            }
+        }
+    }
+
+    func freePort(_ item: PortItem) {
+        guard item.killable else { return }
+        if kill(pid_t(item.pid), SIGKILL) == 0 {
+            receipt = "🔌 Freed port \(item.port) (closed \(item.process))."
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.checkPorts() }
+        }
+    }
+
     // Close one group. Only pids the engine marked closable ever reach here.
     func close(_ group: FindingGroup) {
         var closed = 0
@@ -273,12 +320,69 @@ struct ContentView: View {
                 }
             }
             Divider()
+            ports
+            Divider()
             storage
             Divider()
             footer
         }
         .padding(14)
-        .frame(width: 360)
+        .frame(width: 380)
+    }
+
+    private var ports: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("🔌 Ports").font(.headline)
+                Spacer()
+                if engine.portsLoading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(engine.portsReport == nil ? "Check" : "Re-check") { engine.checkPorts() }
+                        .controlSize(.small)
+                }
+            }
+            if let p = engine.portsReport {
+                if p.ports.isEmpty {
+                    Text("Nothing is listening on any port.").font(.caption).foregroundStyle(.secondary)
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(p.ports) { item in
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack {
+                                    Text(":\(String(item.port))").font(.callout.monospacedDigit()).bold()
+                                    Text(item.process).font(.callout).lineLimit(1)
+                                    Spacer()
+                                    if item.killable {
+                                        Button("Free it") { engine.freePort(item) }.controlSize(.mini)
+                                    } else if item.protected {
+                                        Text("your session").font(.caption2).foregroundStyle(.green)
+                                    } else {
+                                        Text("macOS").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Text(subtitle(for: item))
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            } else if !engine.portsLoading {
+                Text("\"Port already in use\"? Find out who is squatting it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func subtitle(for item: PortItem) -> String {
+        if !item.note.isEmpty { return item.note }
+        var bits: [String] = []
+        if !item.owner.isEmpty { bits.append("started by \(item.owner)") }
+        if !item.cwd.isEmpty && item.cwd != "/" { bits.append("in \(item.cwd)") }
+        bits.append("running \(item.age)")
+        return bits.joined(separator: " · ")
     }
 
     private var storage: some View {
