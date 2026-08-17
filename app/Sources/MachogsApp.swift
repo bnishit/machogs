@@ -313,6 +313,59 @@ final class Engine: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
     }
 
+    // The whole list in one go: one kill sweep, one receipt, one confetti payoff.
+    func closeAll() {
+        var closed = 0
+        var freedCPU = 0.0
+        var freedSecs = 0
+        for g in groups {
+            for f in g.members where f.closable {
+                if kill(pid_t(f.pid), SIGKILL) == 0 {
+                    closed += 1
+                    freedCPU += f.cpu
+                    freedSecs += f.cpu_seconds
+                    Self.log(f)
+                }
+            }
+        }
+        guard closed > 0 else { return }
+        Sfx.pop()
+        celebrate += 1
+        var lines = ["🎉 Closed all \(closed) of them."]
+        let cores = freedCPU / 100
+        if cores >= 0.2 { lines.append("Got back \(String(format: "%.1f", cores)) of a CPU core.") }
+        let charges = freedSecs / 9000
+        if charges >= 2 { lines.append("⚡ The wasted power ≈ \(charges) phone charges.") }
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+            receipt = lines.joined(separator: " ")
+            groups.removeAll()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
+    }
+
+    // Run `machogs brag` and put the card on the clipboard, ready to paste.
+    func copyBrag() {
+        Task.detached(priority: .userInitiated) {
+            guard let script = Self.scriptPath() else { return }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = [script, "brag"]
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = Pipe()
+            guard (try? p.run()) != nil else { return }
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return }
+            await MainActor.run {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                Sfx.pop()
+                self.celebrate += 1
+            }
+        }
+    }
+
     // Same tab-separated line the CLI writes, so `machogs blame` counts us.
     nonisolated private static func log(_ f: Finding) {
         let fmt = DateFormatter()
@@ -451,6 +504,7 @@ struct DiskGauge: View {
 
 struct ContentView: View {
     @ObservedObject var engine: Engine
+    @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @AppStorage("soundOn") private var soundOn = true
     @State private var appeared = false
@@ -465,7 +519,7 @@ struct ContentView: View {
                 }
                 if engine.swapTrouble {
                     banner("🌡️ Your Mac is out of fast memory after \(engine.report?.host.uptime_days ?? 0) days on. Closing programs won't fix that part — restart when you can.",
-                           colors: [.orange, .red.opacity(0.85)])
+                           colors: [Color(red: 0.72, green: 0.48, blue: 0.10), Color(red: 0.55, green: 0.38, blue: 0.12)])
                 }
                 if let receipt = engine.receipt {
                     banner(receipt, colors: [.green, .teal])
@@ -505,6 +559,18 @@ struct ContentView: View {
             }
             Spacer()
             Button {
+                openWindow(id: "story")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Text("📜")
+                    .font(.system(size: 13))
+                    .padding(7)
+                    .background(Circle().fill(Color.primary.opacity(0.07)))
+            }
+            .buttonStyle(Squish())
+            .modifier(HoverLift())
+            .help("The Receipts — your Mac's full scoreboard")
+            Button {
                 engine.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
@@ -514,10 +580,11 @@ struct ContentView: View {
                                ? .linear(duration: 0.8).repeatForever(autoreverses: false)
                                : .default,
                                value: engine.refreshing)
-                    .padding(6)
+                    .padding(8)
                     .background(Circle().fill(Color.primary.opacity(0.07)))
             }
             .buttonStyle(Squish())
+            .modifier(HoverLift())
             .help("Check again")
         }
     }
@@ -564,6 +631,16 @@ struct ContentView: View {
             )
         } else {
             VStack(spacing: 8) {
+                if engine.groups.count > 1 {
+                    HStack {
+                        Text("\(engine.groups.reduce(0) { $0 + $1.count }) things worth closing")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        pill("Close everything 🧹", tint: .pink) { engine.closeAll() }
+                    }
+                    .padding(.horizontal, 2)
+                }
                 ForEach(engine.groups) { group in
                     card(group)
                         .transition(.asymmetric(
@@ -575,20 +652,28 @@ struct ContentView: View {
     }
 
     private func card(_ group: FindingGroup) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(group.story)
-                .font(.system(.callout, design: .rounded))
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                if group.hot {
-                    tag("🔥 \(String(format: "%.0f", group.totalCPU))% of a core", .orange)
-                } else {
-                    tag("💤 idle, holding memory", .secondary)
-                }
-                Spacer()
-                pill(group.count > 1 ? "Close all \(group.count) 💥" : "Close it 💥",
-                     tint: group.hot ? .orange : .pink) {
-                    engine.close(group)
+        HStack(alignment: .top, spacing: 10) {
+            // A glyph avatar per card, rhyming with the mascot: circle + glow.
+            Image(systemName: group.hot ? "flame.fill" : "moon.zzz.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(group.hot ? Color.orange : Color.pink)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill((group.hot ? Color.orange : Color.pink).opacity(0.15)))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(group.story)
+                    .font(.system(.callout, design: .rounded))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if group.hot {
+                        tag("🔥 \(String(format: "%.0f", group.totalCPU))% of a core", .orange)
+                    } else {
+                        tag("💤 idle, holding memory", .secondary)
+                    }
+                    Spacer()
+                    pill(group.count > 1 ? "Close all \(group.count) 💥" : "Close it 💥",
+                         tint: group.hot ? .orange : .pink) {
+                        engine.close(group)
+                    }
                 }
             }
         }
@@ -614,7 +699,7 @@ struct ContentView: View {
     private var ports: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                sectionTitle("🔌", "Ports")
+                sectionTitle("🔌", "Ports", tint: .cyan)
                 Spacer()
                 if engine.portsLoading {
                     ProgressView().controlSize(.small)
@@ -624,8 +709,12 @@ struct ContentView: View {
             }
             if let p = engine.portsReport {
                 if p.ports.isEmpty {
-                    Text("Nothing is listening on any port.")
-                        .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text("✅")
+                        Text("Nothing is listening on any port.")
+                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .foregroundStyle(.green)
+                    }
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 7) {
@@ -694,7 +783,7 @@ struct ContentView: View {
     private var storage: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                sectionTitle("💾", "Storage")
+                sectionTitle("💾", "Storage", tint: .teal)
                 Spacer()
                 if engine.diskLoading {
                     ProgressView().controlSize(.small)
@@ -710,8 +799,12 @@ struct ContentView: View {
                         .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 }
                 if d.items.isEmpty {
-                    Text("Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
-                        .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("✅")
+                        Text("Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
+                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .foregroundStyle(.green)
+                    }
                 }
                 ForEach(d.items) { item in
                     diskRow(item)
@@ -765,9 +858,12 @@ struct ContentView: View {
             )
     }
 
-    private func sectionTitle(_ emoji: String, _ title: String) -> some View {
-        HStack(spacing: 6) {
+    private func sectionTitle(_ emoji: String, _ title: String, tint: Color) -> some View {
+        HStack(spacing: 7) {
             Text(emoji)
+                .font(.system(size: 13))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(tint.opacity(0.14)))
             Text(title).font(.system(.subheadline, design: .rounded).weight(.bold))
         }
     }
@@ -800,11 +896,14 @@ struct ContentView: View {
     }
 
     private func tag(_ text: String, _ color: Color) -> some View {
-        Text(text)
+        // .secondary-on-.secondary is unreadably low-contrast; muted tags get
+        // primary-based ink instead.
+        let muted = color == .secondary
+        return Text(text)
             .font(.system(.caption2, design: .rounded).weight(.semibold))
-            .foregroundStyle(color)
+            .foregroundStyle(muted ? Color.primary.opacity(0.65) : color)
             .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(Capsule().fill(color.opacity(0.12)))
+            .background(Capsule().fill(muted ? Color.primary.opacity(0.08) : color.opacity(0.12)))
     }
 
     private func banner(_ text: String, colors: [Color]) -> some View {
@@ -879,5 +978,15 @@ struct MachogsApp: App {
                 .onAppear { engine.start() }
         }
         .menuBarExtraStyle(.window)
+
+        // `open machogs://receipts` lands here — the popover button, agents,
+        // and the CLI can all summon the scoreboard.
+        Window("The Receipts", id: "story") {
+            StoryView(engine: engine)
+                .onAppear { NSApp.activate(ignoringOtherApps: true) }
+        }
+        .defaultSize(width: 660, height: 640)
+        .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: ["receipts"])
     }
 }

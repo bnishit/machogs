@@ -20,6 +20,17 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.bnishit.machogs</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>machogs</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT license — github.com/bnishit/machogs</string>
 </dict>
