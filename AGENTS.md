@@ -69,8 +69,10 @@ Enough to act on without parsing anything.
   "summary": {"reapable": 0, "killed": 0},
   "findings": [
     {"pid": 57377, "section": "2b", "action": "needs-dupes-flag",
-     "cpu": 0.0, "age": "01:09:11",
-     "detail": "duplicate playwright-mcp under ChatGPT"}
+     "cpu": 0.0, "cpu_seconds": 4, "age": "01:09:11",
+     "owner": "ChatGPT", "what": "browser-control helper",
+     "detail": "duplicate playwright-mcp under ChatGPT",
+     "story": "ChatGPT quietly started 11 copies of the same browser-control helper. All idle, none cleaned up, oldest sitting there 1 hour."}
   ]
 }
 ```

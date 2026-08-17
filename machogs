@@ -788,10 +788,13 @@ if [ "$JSON" -eq 1 ]; then
     [ $first -eq 1 ] || printf ',\n'
     first=0
     # `story` is the line meant to be said out loud, verbatim. Without it every
-    # agent writes its own and most of them are flat.
-    st=$(story "$sec" "$(whatis "$p")" "$(whose "$p")" 1 "${cpu:-0}" "$age" "${csec:-0}")
-    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "detail": "%s", "story": "%s"}' \
-      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$detail")" "$(jesc "$st")"
+    # agent writes its own and most of them are flat. `owner` and `what` are
+    # the same halves broken out, so wrappers (the menu bar app) can log
+    # closes in the format `machogs blame` reads.
+    w=$(whatis "$p"); o=$(whose "$p")
+    st=$(story "$sec" "$w" "$o" 1 "${cpu:-0}" "$age" "${csec:-0}")
+    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "owner": "%s", "what": "%s", "detail": "%s", "story": "%s"}' \
+      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$o")" "$(jesc "$w")" "$(jesc "$detail")" "$(jesc "$st")"
   done < "$ROWS"
   [ $first -eq 0 ] && printf '\n'
   printf '  ]\n}\n'
