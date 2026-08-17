@@ -1,0 +1,374 @@
+#!/bin/bash
+# mac-cleanup — find and clean up the junk that spins your fan.
+#
+#   mac-cleanup                 report only (default, never kills anything)
+#   mac-cleanup kill            kill the SAFE categories (orphans, leaks, zombies)
+#   mac-cleanup kill --dupes    also kill duplicate MCP servers (keeps newest per app)
+#   mac-cleanup --sessions      report idle Claude Code sessions too
+#
+# SAFETY RULES, in order of importance:
+#   1. Never kills anything in this script's own process ancestry.
+#   2. Never kills a Claude Code session. Ever. It only reports them.
+#      (You code in the Claude app — killing a session loses live work.)
+#   3. Report mode is the default. `kill` is always explicit.
+#
+# Section 1 only catches runaways whose PARENT DIED. That missed the real
+# thing (a plugin server spinning at 90% for four days under a live wrapper),
+# so section 1b catches spinners whose parent is alive, using accumulated CPU
+# TIME rather than parentage: hot right now AND hours of CPU burned = stuck.
+#
+# Supersedes debug-bun (bun + zombie apps only). Logs kills to
+# ~/Library/Logs/mac-cleanup.log
+set -uo pipefail
+
+# ---- config ---------------------------------------------------------------
+# Both are env-overridable so the detector can be exercised without waiting
+# four hours for a real spinner:  SPIN_CPU_SECONDS=5 mac-cleanup
+HOT_CPU=${HOT_CPU:-50}                 # %CPU above which a process counts as hot
+SPIN_CPU_SECONDS=${SPIN_CPU_SECONDS:-14400}  # 4h CPU + hot now = stuck, not busy
+IDLE_SESSION_MINS=180      # a Claude Code session idle this long gets flagged
+# Processes that legitimately pin a core for hours. Matched against ucomm.
+NEVER_SPIN="WindowServer|kernel_task|launchd|ffmpeg|HandBrake|Compressor|backupd|mds|mds_stores|mdworker|photoanalysisd"
+ZOMBIE_APPS=("Cursor" "Code" "Electron")   # apps that leak helpers after quitting
+# process patterns treated as "MCP / automation servers"
+MCP_PATTERNS="playwright-mcp|@playwright/mcp|mcp-server-|/mcp/server\.(c|m)?js|modelcontextprotocol"
+HEADLESS_PATTERNS="chrome-headless-shell|--headless"
+# Browser/Electron child processes always carry --type=. They are never MCP
+# servers, even when their --user-data-dir path happens to contain "mcp".
+NOT_MCP="--type=|Google Chrome|Chromium|chrome-headless-shell"
+
+LOG="$HOME/Library/Logs/mac-cleanup.log"
+RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'
+DIM=$'\033[2m'; BLD=$'\033[1m'; NC=$'\033[0m'
+[ -t 1 ] || { RED=; GRN=; YLW=; BLU=; DIM=; BLD=; NC=; }
+
+MODE=report; DUPES=0; SHOW_SESSIONS=0
+for a in "$@"; do
+  case "$a" in
+    kill)        MODE=kill ;;
+    --dupes)     DUPES=1 ;;
+    --sessions)  SHOW_SESSIONS=1 ;;
+    --check)     MODE=check ;;
+    -h|--help)   sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# ---- helpers --------------------------------------------------------------
+ppid_of()  { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+comm_of()  { ps -o comm= -p "$1" 2>/dev/null; }
+cpu_of()   { ps -o pcpu= -p "$1" 2>/dev/null | tr -d ' '; }
+etime_of() { ps -o etime= -p "$1" 2>/dev/null | tr -d ' '; }
+alive()    { kill -0 "$1" 2>/dev/null; }
+short()    { sed 's|.*/||' | cut -c1-46; }
+
+# macOS ps prints TIME as MMMM:SS.ss — minutes are NOT wrapped at 60
+# ("6638:43.89" is 110 hours). Convert to whole seconds.
+cpusecs() { echo "$1" | awk -F: '{printf "%d", $1*60 + $2}'; }
+hms()     { awk -v s="$1" 'BEGIN{printf "%dh%02dm", s/3600, (s%3600)/60}'; }
+
+# Walk up the process tree, printing every ancestor pid.
+ancestry() {
+  local cur=$1 hops=0
+  while [ -n "$cur" ] && [ "$cur" != "0" ] && [ "$cur" != "1" ] && [ $hops -lt 12 ]; do
+    echo "$cur"; cur=$(ppid_of "$cur"); hops=$((hops+1))
+  done
+}
+root_of() { ancestry "$1" | tail -1; }
+
+# Is this a real MCP server process, or a browser child that merely has "mcp"
+# somewhere in its command line?
+is_mcp() {
+  local cmd; cmd=$(ps -o command= -p "$1" 2>/dev/null)
+  [ -n "$cmd" ] || return 1
+  # -e is required: NOT_MCP starts with "--", which grep would read as a flag
+  echo "$cmd" | grep -qE -e "$NOT_MCP" && return 1
+  echo "$cmd" | grep -qE -e "$MCP_PATTERNS"
+}
+
+# A stable signature for "the same server started twice": the script/binary it
+# runs, ignoring paths and per-run flags.
+sig_of() {
+  ps -o command= -p "$1" 2>/dev/null | tr ' ' '\n' \
+    | grep -vE '^-|^$' | sed -n '2p' | sed 's|.*/||'
+}
+
+# Rule 1: never touch our own ancestry.
+SELF_SAFE=" $(ancestry $$ | tr '\n' ' ') "
+# Rule 2: never touch Claude Code / the Claude app.
+claude_app_pids() { pgrep -f "claude-code/.*MacOS/claude|Claude\.app/Contents/MacOS/Claude" 2>/dev/null; }
+CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
+
+protected() {
+  local pid=$1 a
+  # protected if the process itself, OR any of its ancestors, is our own
+  # session or a live Claude Code session. This is the net that stops us
+  # reaping the MCP servers belonging to sessions you're actively coding in.
+  for a in $pid $(ancestry "$pid"); do
+    case "$SELF_SAFE"   in *" $a "*) return 0 ;; esac
+    case "$CLAUDE_SAFE" in *" $a "*) return 0 ;; esac
+  done
+  return 1
+}
+
+# --check: prove the safety net works. Lists every automation process and
+# whether the script would refuse to kill it, and why. Kills nothing.
+if [ "$MODE" = check ]; then
+  echo "${BLD}=== mac-cleanup --check ===${NC}  ${DIM}safety audit, kills nothing${NC}"
+  echo "  own ancestry protected : $(echo $SELF_SAFE | wc -w | tr -d ' ') pids"
+  echo "  Claude Code protected  : $(echo $CLAUDE_SAFE | wc -w | tr -d ' ') pids"
+  echo
+  printf "  %-8s %-11s %-18s %s\n" PID VERDICT OWNER COMMAND
+  for pid in $(pgrep -f "$MCP_PATTERNS" 2>/dev/null); do
+    alive "$pid" || continue
+    is_mcp "$pid" || continue
+    owner=$(comm_of "$(root_of "$pid")" | short)
+    if protected "$pid"; then v="${GRN}PROTECTED${NC}"; else v="${YLW}reapable${NC} "; fi
+    printf "  %-8s %-22b %-18s %s\n" "$pid" "$v" "${owner:-?}" "$(sig_of "$pid")"
+  done
+  echo
+  echo "  ${DIM}Anything owned by Claude Code must read PROTECTED.${NC}"
+  exit 0
+fi
+
+KILLED=0; FOUND=0
+declare -a KILL_LIST=()
+
+# queue <pid> <reason>
+queue() {
+  local pid=$1 reason=$2
+  alive "$pid" || return
+  if protected "$pid"; then
+    printf "    %sskip%s %-7s %s ${DIM}(protected: own session / Claude Code)${NC}\n" "$DIM" "$NC" "$pid" "$reason"
+    return
+  fi
+  FOUND=$((FOUND+1))
+  KILL_LIST+=("$pid|$reason")
+  printf "    %s%-7s%s cpu=%-5s age=%-12s %s\n" "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$reason"
+}
+
+flush_kills() {
+  [ "$MODE" = kill ] || return
+  [ ${#KILL_LIST[@]} -eq 0 ] && return
+  echo
+  echo "  ${YLW}killing ${#KILL_LIST[@]} process(es)...${NC}"
+  local entry pid reason
+  for entry in "${KILL_LIST[@]}"; do
+    pid=${entry%%|*}; reason=${entry#*|}
+    alive "$pid" || continue
+    if kill -9 "$pid" 2>/dev/null; then
+      KILLED=$((KILLED+1))
+      echo "$(date '+%F %T') killed $pid — $reason" >> "$LOG"
+      echo "    ${RED}killed${NC} $pid ${DIM}($reason)${NC}"
+    fi
+  done
+  KILL_LIST=()
+}
+
+hdr() { echo; echo "${BLU}${BLD}$1${NC}"; }
+
+# ---- 0. system health -----------------------------------------------------
+cores=$(sysctl -n hw.ncpu)
+# macOS: "load averages: 4.61 5.18 6.01" (space separated, no commas)
+load=$(uptime | sed 's/.*load averages*: *//' | awk '{print $1}' | tr -d ',')
+# macOS: "total = 16384.00M  used = 15131.31M  free = 1252.69M  (encrypted)"
+swap_tot=$(sysctl -n vm.swapusage  | awk '{print $3}' | tr -d 'M')
+swap_used=$(sysctl -n vm.swapusage | awk '{print $6}' | tr -d 'M')
+
+echo "${BLD}=== mac-cleanup ===${NC}  ${DIM}$(date '+%F %H:%M')  ·  mode: $MODE${NC}"
+hdr "System"
+loadint=${load%.*}
+if [ "${loadint:-0}" -gt "$cores" ]; then
+  echo "  load ${RED}$load${NC} on $cores cores  ${RED}<- oversubscribed${NC}"
+else
+  echo "  load ${GRN}$load${NC} on $cores cores"
+fi
+swap_pct=$(awk -v u="${swap_used:-0}" -v t="${swap_tot:-1}" 'BEGIN{printf "%d", (u/t)*100}')
+if [ "$swap_pct" -gt 80 ]; then
+  echo "  swap ${RED}${swap_used}M / ${swap_tot}M (${swap_pct}%)${NC}  ${RED}<- thrashing, reboot to clear${NC}"
+else
+  echo "  swap ${GRN}${swap_used}M / ${swap_tot}M (${swap_pct}%)${NC}"
+fi
+echo "  uptime$(uptime | sed 's/.*up \([^,]*,\{0,1\}[^,]*\), *[0-9]* user.*/ \1/')"
+
+# ---- 1. orphaned runaways -------------------------------------------------
+hdr "1. Orphaned runaways  ${DIM}(parent died, still burning CPU)${NC}"
+found_any=0
+while read -r pid ppid cpu cmd; do
+  [ "$ppid" = "1" ] || continue
+  ci=${cpu%.*}; [ "${ci:-0}" -ge "$HOT_CPU" ] || continue
+  cwd=$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}')
+  queue "$pid" "orphan $(echo "$cmd" | short) ${cwd:+[$(echo "$cwd" | sed "s|$HOME|~|")]}"
+  found_any=1
+done < <(ps -Ao pid=,ppid=,pcpu=,comm= -r | awk '{print $1, $2, $3, $4}')
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 1b. stuck spinners (parent alive) ------------------------------------
+# The gap section 1 leaves. A process can spin forever under a perfectly
+# healthy parent — nothing is orphaned, so parentage tells us nothing. What
+# separates "stuck" from "legitimately busy" is CPU TIME: a build burns
+# minutes, a spin loop burns hours. Both conditions must hold.
+# Own-user only, so root daemons (WindowServer, kernel_task) are out of scope.
+hdr "1b. Stuck spinners  ${DIM}(parent alive, but burning CPU for hours)${NC}"
+found_any=0
+while read -r pid ppid cpu ctime ucomm; do
+  [ -n "$pid" ] || continue
+  [ "$ppid" = "1" ] && continue                    # section 1's territory
+  ci=${cpu%.*}; [ "${ci:-0}" -ge "$HOT_CPU" ] || continue
+  secs=$(cpusecs "$ctime"); [ "${secs:-0}" -ge "$SPIN_CPU_SECONDS" ] || continue
+  echo "$ucomm" | grep -qE "$NEVER_SPIN" && continue
+  cwd=$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}')
+  queue "$pid" "spinning $(hms "$secs") of CPU — $(echo "$ucomm" | short)${cwd:+ [$(echo "$cwd" | sed "s|$HOME|~|")]}"
+  found_any=1
+  # A spinner is often the child of a thin supervisor that would just restart
+  # it. Take the parent too, but only when it is plainly a leftover wrapper:
+  # orphaned itself and doing nothing.
+  pcpu_p=$(cpu_of "$ppid"); pcpu_p=${pcpu_p%.*}
+  if [ "$(ppid_of "$ppid")" = "1" ] && [ "${pcpu_p:-0}" -le 2 ]; then
+    queue "$ppid" "  idle wrapper of $pid ($(comm_of "$ppid" | short))"
+  fi
+done < <(ps -U "$(id -un)" -o pid=,ppid=,pcpu=,time=,ucomm= -r)
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 2. leaked / orphaned MCP + automation servers ------------------------
+hdr "2. Leaked automation servers  ${DIM}(MCP servers whose owner is gone)${NC}"
+found_any=0
+for pid in $(pgrep -f "$MCP_PATTERNS" 2>/dev/null); do
+  alive "$pid" || continue
+  pp=$(ppid_of "$pid")
+  root=$(root_of "$pid")
+  # leak if orphaned, or if the root ancestor is no longer alive
+  if [ "$pp" = "1" ] || { [ -n "$root" ] && ! alive "$root"; }; then
+    queue "$pid" "orphaned MCP server ($(comm_of "$pid" | short))"
+    found_any=1
+  fi
+done
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 2b. duplicate MCP servers under one supervisor -----------------------
+hdr "2b. Duplicate MCP servers  ${DIM}(same app spawned many, keeps newest)${NC}"
+found_any=0
+# bash 3.2 (macOS default) has no associative arrays, so build a plain
+# "rootpid<TAB>signature<TAB>pid" table and group it with sort/awk.
+# Group by the SUPERVISOR (grandparent), not the root app.
+#
+# This distinction matters. Every Claude Code session and the Claude app share
+# the same root, so grouping by root makes 7 legitimately-separate sessions
+# look like 7 duplicates. Their grandparents differ (one per session), while
+# a leaking app spawns many servers under ONE shared grandparent. Grandparent
+# is what actually separates "one per session" from "leaked pile".
+TBL=$(for pid in $(pgrep -f "$MCP_PATTERNS" 2>/dev/null); do
+  alive "$pid" || continue
+  is_mcp "$pid" || continue                 # skips Chrome/Electron children
+  pp=$(ppid_of "$pid"); [ -n "$pp" ] || continue
+  gp=$(ppid_of "$pp");  [ -n "$gp" ] || gp=$pp
+  sig=$(sig_of "$pid");  [ -n "$sig" ] || sig=$(comm_of "$pid" | short)
+  printf '%s\t%s\t%s\n' "$gp" "$sig" "$pid"
+done | sort -k1,1 -k2,2 -k3,3n)
+
+# a group = same supervisor + same server signature, appearing more than once
+while IFS=$'\t' read -r gp sig; do
+  [ -n "$gp" ] || continue
+  pids=$(echo "$TBL" | awk -F'\t' -v r="$gp" -v s="$sig" '$1==r && $2==s {print $3}')
+  count=$(echo "$pids" | wc -l | tr -d ' ')
+  [ "$count" -gt 1 ] || continue
+  owner=$(comm_of "$(root_of "$gp")" | short); [ -n "$owner" ] || owner="pid $gp"
+  newest=$(echo "$pids" | tail -1)          # highest pid = most recent, keep it
+  for pid in $pids; do
+    [ "$pid" = "$newest" ] && continue
+    alive "$pid" || continue
+    ci=$(cpu_of "$pid"); ci=${ci%.*}
+    kids=$(pgrep -P "$pid" 2>/dev/null | wc -l | tr -d ' ')
+    # only a leak if idle AND holding nothing (no live browser attached)
+    [ "${ci:-0}" -le 2 ] && [ "$kids" -eq 0 ] || continue
+    found_any=1
+    if [ $DUPES -eq 1 ]; then
+      queue "$pid" "duplicate $sig under $owner"
+    else
+      printf "    %s%-7s%s cpu=%-5s age=%-12s duplicate %s under %s ${DIM}(--dupes to kill)${NC}\n" \
+        "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$sig" "$owner"
+    fi
+  done
+done < <(echo "$TBL" | awk -F'\t' 'NF{print $1"\t"$2}' | sort -u)
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 3. headless browsers with no live owner ------------------------------
+hdr "3. Stranded headless browsers"
+found_any=0
+for pid in $(pgrep -f "$HEADLESS_PATTERNS" 2>/dev/null); do
+  alive "$pid" || continue
+  pp=$(ppid_of "$pid")
+  # only consider top-level browser processes (parent isn't itself headless)
+  case "$(ps -o command= -p "$pp" 2>/dev/null)" in *chrome-headless-shell*) continue ;; esac
+  root=$(root_of "$pid")
+  if [ "$pp" = "1" ] || { [ -n "$root" ] && ! alive "$root"; }; then
+    queue "$pid" "stranded headless browser (+children)"
+    for k in $(pgrep -P "$pid" 2>/dev/null); do queue "$k" "  child of stranded browser"; done
+    found_any=1
+  fi
+done
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 4. zombie app helpers ------------------------------------------------
+hdr "4. Zombie app helpers  ${DIM}(app quit, helpers still running)${NC}"
+found_any=0
+for app in "${ZOMBIE_APPS[@]}"; do
+  pgrep -x "$app" >/dev/null 2>&1 && continue     # app is open, helpers expected
+  for pid in $(pgrep -f "/$app\.app/.*(crashpad|Helper|gpu-process|utility|renderer)" 2>/dev/null); do
+    queue "$pid" "$app zombie helper (app is closed)"
+    found_any=1
+  done
+done
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 5. idle Claude Code sessions — REPORT ONLY ---------------------------
+if [ $SHOW_SESSIONS -eq 1 ]; then
+  hdr "5. Claude Code sessions  ${DIM}(report only — never killed by this script)${NC}"
+  now=$(date +%s); any=0
+  for pid in $(pgrep -f "claude-code/.*MacOS/claude" 2>/dev/null); do
+    # pgrep -f also matches the Helpers/disclaimer wrapper (the claude path is
+    # in its argv). Keep only processes that ARE the claude binary.
+    case "$(ps -o comm= -p "$pid" 2>/dev/null)" in
+      */claude.app/Contents/MacOS/claude) ;;
+      *) continue ;;
+    esac
+    cwd=$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}')
+    [ -n "$cwd" ] || continue
+    d="$HOME/.claude/projects/$(echo "$cwd" | sed 's|[/.]|-|g')"
+    newest=$(ls -t "$d"/*.jsonl 2>/dev/null | head -1)
+    if [ -n "$newest" ]; then
+      mins=$(( (now - $(stat -f %m "$newest")) / 60 ))
+      idle=$(printf "%dh %02dm" $((mins/60)) $((mins%60)))
+      if [ "$mins" -ge "$IDLE_SESSION_MINS" ]; then tag="${YLW}idle $idle${NC}"; else tag="${GRN}active $idle ago${NC}"; fi
+    else
+      tag="${DIM}unknown${NC}"; mins=0
+    fi
+    printf "    %-7s %-22s %s\n" "$pid" "$tag" "$(basename "$cwd")"
+    any=1
+  done
+  [ $any -eq 0 ] && echo "  ${GRN}none${NC}"
+  echo "  ${DIM}Idle time is per worktree — two sessions in the same worktree share it.${NC}"
+  echo "  ${DIM}To close one: switch to it in the Claude app and quit it there.${NC}"
+  echo "  ${DIM}This script will not kill sessions — you'd lose unsaved work.${NC}"
+fi
+
+# ---- summary --------------------------------------------------------------
+echo
+if [ "$MODE" = kill ]; then
+  echo "${BLD}Done.${NC} killed ${RED}$KILLED${NC} process(es). log: ${DIM}$LOG${NC}"
+  echo "${DIM}new load: $(uptime | sed 's/.*load averages*: //')${NC}"
+else
+  if [ $FOUND -eq 0 ]; then
+    echo "${GRN}${BLD}Clean.${NC} nothing to reap."
+  else
+    echo "${BLD}Found $FOUND reapable process(es).${NC} run ${BLD}mac-cleanup kill${NC} to clean up."
+  fi
+fi
+[ "$swap_pct" -gt 80 ] && echo "${YLW}Note:${NC} swap is ${swap_pct}% full — a restart is the only real fix for that."
+exit 0
