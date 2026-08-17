@@ -12,16 +12,20 @@ explicit `kill` argument.
 ## Use this workflow
 
 1. `machogs --json --sessions` — always start here. It closes nothing.
-2. Read `findings`. Tell the user what you found in plain language: what the
-   program is, how much CPU it is burning, how long it has been doing it.
-   `detail` already names the app that left it behind — use that, not the pid.
+2. Read `findings`. **Each one carries a `story` — say that, close to verbatim.**
+   It is already written for a person: it names the app to blame, what the thing
+   is, and what it has cost. Do not translate a pid and a percentage yourself.
 3. **Ask before closing anything.** Wait for the user to agree.
 4. Then either:
    - hand control back with `machogs fix`, which asks the user about each item
      itself (best when the user is at the keyboard), or
    - `machogs kill --json` (add `--dupes` if duplicate servers are part of what
      the user agreed to) when you are acting for them.
-5. Report what actually closed — re-read `findings` and check `action`.
+5. Report what actually closed — re-read `findings` and check `action`. In
+   plain (non-JSON) mode the tool prints a receipt: cores freed, CPU time
+   already burned, what it would have cost by tomorrow. Pass that on. It is the
+   part the user cares about, and the battery figure in it is an estimate —
+   keep the hedge, do not promise a number.
 
 Note: `machogs fix` needs a real terminal and will refuse to run without one.
 Use `machogs kill` for unattended work.
@@ -105,3 +109,16 @@ nothing. Anything owned by Claude Code must read `PROTECTED`.
 Duplicate MCP servers are not counted unless `--dupes` was passed, so a run
 reporting `reapable: 0` can still have findings worth showing the user. Read
 `findings`, not just the summary.
+
+## Two extra commands worth surfacing
+
+Both are read-only and touch no processes.
+
+- `machogs blame` — a scoreboard of which app leaves the most behind on this
+  machine, built from the log over time. Useful when the user asks "why does
+  this keep happening?"
+- `machogs brag` — the same totals as a card the user can paste somewhere.
+  Offer it only if they seem pleased; never push it.
+
+The log they read is `~/Library/Logs/machogs.log`, one tab-separated line per
+close: time, pid, app to blame, what it was, CPU%, CPU seconds.

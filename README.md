@@ -103,9 +103,58 @@ uninstall, delete the file.
 ```sh
 machogs              # plain answer. Closes nothing.
 machogs fix          # go through them one at a time, asking before each
+machogs blame        # scoreboard: which app leaves the most junk behind
+machogs brag         # a shareable card of what your Mac has been wasting
 machogs --details    # the technical report, by category
 machogs --json       # machine-readable, for agents
 machogs --check      # audit the safety rules, close nothing
+```
+
+## Closing something should feel like a win
+
+Killing a process is an event. Getting a CPU core back is a result. Same
+action, and only one of them is worth telling anyone about:
+
+```
+Closed 1 program.
+You just got back 1.0 of a CPU core that nothing was using.
+They had already burned 91 hours of processor time.
+Left alone, they would have burned 23 hours more by this time tomorrow.
+Roughly an hour or two of battery back, depending on your Mac.
+```
+
+The battery line is an estimate and says so. The rest is measured.
+
+## Who is the worst offender on your machine
+
+Every close is logged, so over weeks the log becomes a scoreboard — a fact
+only your own machine can tell you:
+
+```
+$ machogs blame
+
+Who leaves the most junk on your Mac
+since 2026-08-17
+
+  APP                          CLOSED   CPU TIME WASTED
+  ChatGPT                          39   2 hours
+  a Claude Code plugin              1   91 hours
+```
+
+And `machogs brag` prints the same thing as something you can paste:
+
+```
+  ---------------------------------------------
+   my mac was doing 93 hours of work
+   for programs i never opened.
+
+   40 background programs closed
+   worst offender: ChatGPT (39 of them)
+   single worst: 91 hours burned by one process
+
+   found with machogs
+   github.com/bnishit/machogs
+  ---------------------------------------------
 ```
 
 `machogs fix` shows you one thing at a time and waits:
@@ -160,13 +209,23 @@ look, `2` bad arguments.
   "findings": [
     {"pid": 57377, "section": "2b", "action": "needs-dupes-flag",
      "cpu": 0.0, "age": "01:09:11",
-     "detail": "duplicate playwright-mcp under ChatGPT"}
+     "detail": "duplicate playwright-mcp under ChatGPT",
+     "story": "ChatGPT quietly started 11 copies of the same browser-control helper. All idle, none cleaned up, oldest sitting there 31 minutes."}
   ]
 }
 ```
 
 Every finding carries an `action`, so an agent knows what it may touch:
 `reapable`, `needs-dupes-flag`, `protected`, `never-killed`, `killed`.
+
+It also carries a **`story`** — the sentence meant to be said out loud, to a
+person, word for word:
+
+> "A Claude Code plugin left a bun running at 98.7% of a CPU core for 4 days.
+> It has burned 91 hours of processor time."
+
+The tool knows the good version of that sentence. If it did not hand it over,
+every agent would invent its own and most of them would be flat.
 
 **[AGENTS.md](AGENTS.md) is the instruction sheet.** It has the workflow, the
 JSON shape, and the rules — chiefly: never close anything before showing the

@@ -6,6 +6,8 @@
 #
 #   machogs                 plain answer (default, never closes anything)
 #   machogs fix             go through them one at a time, asking before each
+#   machogs blame           scoreboard: which app leaves the most junk behind
+#   machogs brag            a shareable card of what your Mac has wasted
 #   machogs --details       the technical report, by category
 #   machogs kill            close everything reapable, no questions (scripts)
 #   machogs kill --dupes    also close duplicate MCP servers (keeps newest)
@@ -63,6 +65,8 @@ for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
     fix)         MODE=fix ;;
+    blame)       MODE=blame ;;
+    brag)        MODE=brag ;;
     --dupes)     DUPES=1 ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
@@ -99,7 +103,21 @@ trap 'rm -f "$ROWS" "$GRP"' EXIT
 # row <pid> <category> <action> <cpu> <age> <detail>
 # Tab-separated. Nothing here may contain a tab or newline; the fields are all
 # pids, numbers, and process names, so that holds.
-row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$ROWS"; }
+row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$(cputime_of "$1")" >> "$ROWS"; }
+
+# Total CPU seconds this process has consumed since it started.
+cputime_of() { cpusecs "$(ps -o time= -p "$1" 2>/dev/null | tr -d ' ')"; }
+
+# The log is the scoreboard. Written tab-separated so `machogs blame` can add
+# it up months later: when, pid, which app is to blame, what it was, and what
+# it cost. Free-text log lines from older versions still parse — badly — so
+# blame treats anything it cannot read as "unknown".
+# logclose <pid> <owner> <what> <cpu%> <cpu-seconds>
+logclose() {
+  local owner=${2:-unknown}; [ "$owner" = "-" ] && owner="unknown"
+  printf '%s\tclosed\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date '+%F %T')" "$1" "$owner" "${3:-program}" "${4:-0}" "${5:-0}" >> "$LOG"
+}
 
 # ---- plain language -------------------------------------------------------
 # Everything below exists to answer one question a normal person actually asks:
@@ -156,12 +174,20 @@ etime_secs() {
       printf "%d", d*86400 + s }'
 }
 
+# n + unit, pluralised, no leading zeros. "04" -> "4 days", "1" -> "1 day".
+count_unit() {
+  local d; d=$(printf '%s' "${1:-0}" | tr -cd '0-9'); [ -n "$d" ] || d=0
+  local n=$((10#$d)) u=$2
+  [ "$n" -eq 1 ] && { echo "1 $u"; return; }
+  echo "$n ${u}s"
+}
+
 # "04-01:37:50" (4 days) or "01:29:07" (1.5 hours) -> words.
 plain_age() {
   case "$1" in
-    *-*) echo "$(echo "$1" | cut -d- -f1) days" ;;
-    *:*:*) echo "$(echo "$1" | cut -d: -f1) hours" ;;
-    *) echo "$(echo "$1" | cut -d: -f1) minutes" ;;
+    *-*)   count_unit "$(echo "$1" | cut -d- -f1)" day ;;
+    *:*:*) count_unit "$(echo "$1" | cut -d: -f1)" hour ;;
+    *)     count_unit "$(echo "$1" | cut -d: -f1)" minute ;;
   esac
 }
 
@@ -176,6 +202,89 @@ why_line() {
     4)  echo "The app was closed, but this piece of it stayed behind." ;;
     *)  echo "" ;;
   esac
+}
+
+# ---- stories ---------------------------------------------------------------
+# The tool knows the good version of the sentence. If it does not say it, every
+# agent invents its own and most of them are flat. story() is the line meant to
+# be repeated out loud, to a person, verbatim.
+
+# 328000 -> "91 hours". 5400 -> "1.5 hours". 300 -> "5 minutes".
+burned() {
+  awk -v s="${1:-0}" 'BEGIN{
+    if (s >= 864000) { printf "%.0f days", s/86400 }
+    else if (s >= 7200) { printf "%d hours", s/3600 }
+    else if (s >= 3600) { printf "1 hour" }
+    else if (s >= 120) { printf "%d minutes", s/60 }
+    else if (s >= 60) { printf "1 minute" }
+    else { printf "%d seconds", s }
+  }'
+}
+
+article() {
+  local a="A"; [ "${2:-}" = lower ] && a="a"
+  case "$1" in [AaEeIiOoUu]*) echo "${a}n" ;; *) echo "$a" ;; esac
+}
+
+# story <sec> <what> <owner> <count> <cpu> <age> <cpusecs>
+# Always ends up capitalised — the owner can legitimately be "a Claude Code
+# plugin", which would otherwise start the sentence in lower case.
+story() { _story "$@" | awk '{ print toupper(substr($0,1,1)) substr($0,2) }' | tr -d '\n'; }
+_story() {
+  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6 csec=$7
+  [ "$owner" = "-" ] && owner=""
+  if [ "$sec" = "5" ]; then
+    printf 'One of your live Claude Code sessions, running %s. Never closed by this tool.' \
+      "$(plain_age "$age")"
+    return
+  fi
+  local who="Something"; [ -n "$owner" ] && who="$owner"
+  local ci=${cpu%.*}
+
+  if [ "${ci:-0}" -ge 20 ]; then
+    # the headline case: it is on fire, and the burned total is the punchline
+    if [ -n "$owner" ]; then
+      printf '%s left %s %s running at %s%% of a CPU core for %s. It has burned %s of processor time.' \
+        "$who" "$(article "$what" lower)" "$what" "$cpu" "$(plain_age "$age")" "$(burned "$csec")"
+    else
+      printf '%s %s is stuck at %s%% of a CPU core and has been for %s, burning %s of processor time.' \
+        "$(article "$what")" "$what" "$cpu" "$(plain_age "$age")" "$(burned "$csec")"
+    fi
+  elif [ "$count" -gt 1 ]; then
+    printf '%s quietly started %s copies of the same %s. All idle, none cleaned up, oldest sitting there %s.' \
+      "$who" "$count" "$what" "$(plain_age "$age")"
+  elif [ -n "$owner" ]; then
+    printf '%s left %s %s behind. Idle for %s, and nothing is using it.' \
+      "$who" "$(article "$what" lower)" "$what" "$(plain_age "$age")"
+  else
+    printf '%s %s has been idle for %s with nothing using it.' "$(article "$what")" "$what" "$(plain_age "$age")"
+  fi
+}
+
+# The receipt. Closing a process is an event; getting a core back is a result.
+# Same action, and only one of them is worth telling someone about.
+#
+# The battery line is an ESTIMATE and says so. A core at full tilt costs roughly
+# 6W on Apple silicon, against a machine that idles near 8W, so freeing a full
+# core really is worth hours — but it depends on the Mac, so we never print a
+# precise number we cannot stand behind.
+receipt() {
+  local cpu_freed=$1 csec_freed=$2 nclosed=$3
+  local cores; cores=$(awk -v c="${cpu_freed:-0}" 'BEGIN{printf "%.1f", c/100}')
+  echo
+  echo "${GRN}${BLD}Closed $(count_unit "$nclosed" program).${NC}"
+  if [ "$(awk -v c="${cores:-0}" 'BEGIN{print (c>=0.2)?1:0}')" = "1" ]; then
+    echo "You just got back ${BLD}${cores} of a CPU core${NC} that nothing was using."
+  fi
+  if [ "${csec_freed:-0}" -ge 600 ]; then
+    echo "They had already burned ${BLD}$(burned "$csec_freed")${NC} of processor time."
+  fi
+  # what it would have cost by tomorrow if left alone
+  if [ "$(awk -v c="${cpu_freed:-0}" 'BEGIN{print (c>=20)?1:0}')" = "1" ]; then
+    local tomorrow; tomorrow=$(awk -v c="$cpu_freed" 'BEGIN{printf "%d", (c/100)*86400}')
+    echo "Left alone, they would have burned ${BLD}$(burned "$tomorrow")${NC} more by this time tomorrow."
+    echo "${DIM}Roughly an hour or two of battery back, depending on your Mac.${NC}"
+  fi
 }
 
 # One GROUP of identical findings, as a few lines of English. Seven copies of
@@ -217,7 +326,7 @@ short()    { sed 's|.*/||' | cut -c1-46; }
 
 # macOS ps prints TIME as MMMM:SS.ss — minutes are NOT wrapped at 60
 # ("6638:43.89" is 110 hours). Convert to whole seconds.
-cpusecs() { echo "$1" | awk -F: '{printf "%d", $1*60 + $2}'; }
+cpusecs() { echo "${1:-0:0}" | awk -F: '{printf "%d", $1*60 + $2}'; }
 hms()     { awk -v s="$1" 'BEGIN{printf "%dh%02dm", s/3600, (s%3600)/60}'; }
 
 # Walk up the process tree, printing every ancestor pid.
@@ -264,6 +373,75 @@ protected() {
   return 1
 }
 
+# ---- blame / brag ---------------------------------------------------------
+# Reading the scoreboard. Both are read-only and touch no processes at all.
+# The data is a fact only this tool can produce: which app leaks most on YOUR
+# machine, measured, over months.
+
+blame_table() {
+  awk -F'\t' '
+    $2=="closed" { app=$4; n[app]++; secs[app]+=$7; if ($7+0 > worst[app]+0) worst[app]=$7+0; next }
+    # older free-text lines, two shapes:
+    #   "... closed 123 — browser-control helper (ChatGPT)"
+    #   "... killed 123 — duplicate server.cjs under ChatGPT"
+    { if (match($0, /\(([^)]+)\)$/))      { app=substr($0, RSTART+1, RLENGTH-2); n[app]++ }
+      else if (match($0, / under .+$/))   { app=substr($0, RSTART+7); n[app]++ }
+      else n["unknown"]++ }
+    END { for (a in n) printf "%d\t%d\t%d\t%s\n", n[a], secs[a], worst[a], a }
+  ' "$LOG" 2>/dev/null | sort -rn
+}
+
+if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
+  if [ ! -s "$LOG" ]; then
+    echo "Nothing closed yet — no scoreboard to show."
+    echo "${DIM}Run ${BLD}machogs fix${NC}${DIM} first.${NC}"
+    exit 0
+  fi
+  total_n=0; total_s=0; worst_s=0; worst_app=""; first_seen=""
+  first_seen=$(head -1 "$LOG" | cut -c1-10)
+  BL=$(blame_table)
+
+  if [ "$MODE" = blame ]; then
+    echo
+    echo "${BLD}Who leaves the most junk on your Mac${NC}"
+    echo "${DIM}since ${first_seen}${NC}"
+    echo
+    printf "  %-26s %8s   %s\n" "APP" "CLOSED" "CPU TIME WASTED"
+    while IFS=$'\t' read -r n secs worst app; do
+      [ -n "$app" ] || continue
+      printf "  %-26s %8s   %s\n" "$app" "$n" "$(burned "$secs")"
+    done < <(printf '%s\n' "$BL")
+    echo
+  fi
+
+  while IFS=$'\t' read -r n secs worst app; do
+    [ -n "$app" ] || continue
+    total_n=$((total_n + n)); total_s=$((total_s + secs))
+    if [ "${worst:-0}" -gt "$worst_s" ]; then worst_s=$worst; worst_app=$app; fi
+  done < <(printf '%s\n' "$BL")
+
+  if [ "$MODE" = brag ]; then
+    top=$(printf '%s\n' "$BL" | head -1)
+    top_app=$(printf '%s' "$top" | cut -f4); top_n=$(printf '%s' "$top" | cut -f1)
+    echo
+    echo "  ---------------------------------------------"
+    echo "   my mac was doing $(burned "$total_s") of work"
+    echo "   for programs i never opened."
+    echo
+    echo "   $total_n background programs closed"
+    [ -n "$top_app" ] && echo "   worst offender: $top_app ($top_n of them)"
+    [ "${worst_s:-0}" -gt 3600 ] && echo "   single worst: $(burned "$worst_s") burned by one process"
+    echo
+    echo "   found with machogs"
+    echo "   github.com/bnishit/machogs"
+    echo "  ---------------------------------------------"
+    echo
+    echo "${DIM}Copy the block above. That is the post.${NC}"
+    echo
+  fi
+  exit 0
+fi
+
 # --check: prove the safety net works. Lists every automation process and
 # whether the script would refuse to kill it, and why. Kills nothing.
 if [ "$MODE" = check ]; then
@@ -290,7 +468,7 @@ fi
 # Real stdout is parked on fd 4 and restored at the end.
 if [ "$JSON" -eq 1 ] || [ "$HUMAN" -eq 1 ]; then exec 4>&1 1>/dev/null; fi
 
-KILLED=0; FOUND=0; KILLED_PIDS=""
+KILLED=0; FOUND=0; KILLED_PIDS=""; FREED_CPU=0; FREED_CSEC=0
 declare -a KILL_LIST=()
 
 # queue <pid> <reason>
@@ -317,10 +495,16 @@ flush_kills() {
   for entry in "${KILL_LIST[@]}"; do
     pid=${entry%%|*}; reason=${entry#*|}
     alive "$pid" || continue
+    # read the identity BEFORE killing; afterwards ps knows nothing about it
+    local who what cpu csec
+    who=$(whose "$pid"); what=$(whatis "$pid")
+    cpu=$(cpu_of "$pid"); csec=$(cputime_of "$pid")
     if kill -9 "$pid" 2>/dev/null; then
       KILLED=$((KILLED+1))
       KILLED_PIDS="$KILLED_PIDS $pid"
-      echo "$(date '+%F %T') killed $pid — $reason" >> "$LOG"
+      FREED_CPU=$(awk -v a="$FREED_CPU" -v b="${cpu:-0}" 'BEGIN{printf "%.1f", a+b}')
+      FREED_CSEC=$((FREED_CSEC + csec))
+      logclose "$pid" "$who" "$what" "$cpu" "$csec"
       echo "    ${RED}killed${NC} $pid ${DIM}($reason)${NC}"
     fi
   done
@@ -526,7 +710,7 @@ if [ $SHOW_SESSIONS -eq 1 ]; then
       tag="${DIM}unknown${NC}"; mins=0
     fi
     printf "    %-7s %-22s %s\n" "$pid" "$tag" "$(basename "$cwd")"
-    row "$pid" "$SECTION" "never-killed" "$(cpu_of $pid)" "${mins}m-idle" "Claude Code session in $(basename "$cwd")"
+    row "$pid" "$SECTION" "never-killed" "$(cpu_of $pid)" "$(etime_of "$pid")" "Claude Code session in $(basename "$cwd"), idle ${mins}m"
     any=1
   done
   [ $any -eq 0 ] && echo "  ${GRN}none${NC}"
@@ -561,14 +745,17 @@ if [ "$JSON" -eq 1 ]; then
   printf '  "summary": {"reapable": %s, "killed": %s},\n' "$FOUND" "$KILLED"
   printf '  "findings": [\n'
   first=1
-  while IFS=$'\t' read -r p sec act cpu age detail; do
+  while IFS=$'\t' read -r p sec act cpu age detail csec; do
     [ -n "$p" ] || continue
     # a queued process that flush_kills actually reaped is reported as killed
     case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac
     [ $first -eq 1 ] || printf ',\n'
     first=0
-    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "age": "%s", "detail": "%s"}' \
-      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "$(jesc "$age")" "$(jesc "$detail")"
+    # `story` is the line meant to be said out loud, verbatim. Without it every
+    # agent writes its own and most of them are flat.
+    st=$(story "$sec" "$(whatis "$p")" "$(whose "$p")" 1 "${cpu:-0}" "$age" "${csec:-0}")
+    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "detail": "%s", "story": "%s"}' \
+      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$detail")" "$(jesc "$st")"
   done < "$ROWS"
   [ $first -eq 0 ] && printf '\n'
   printf '  ]\n}\n'
@@ -577,6 +764,26 @@ fi
 # ---- plain-language report and guided fix ---------------------------------
 if [ "$HUMAN" -eq 1 ]; then
   exec 1>&4 4>&-
+
+  # `kill` has already done the closing by now, so the findings it acted on are
+  # dead and would filter out below — which read as "nothing found" right after
+  # closing two things. Report the receipt instead.
+  if [ "$MODE" = kill ]; then
+    if [ "$KILLED" -gt 0 ]; then
+      receipt "$FREED_CPU" "$FREED_CSEC" "$KILLED"
+    else
+      echo
+      echo "${GRN}Nothing to close.${NC}"
+    fi
+    if [ "$swap_pct" -gt 80 ]; then
+      echo
+      echo "${YLW}Note:${NC} your Mac is out of fast memory after $(uptime | sed -n 's/.*up \([0-9]*\) day.*/\1/p' | head -1) days on."
+      echo "Closing programs does not fix that. ${BLD}Restart when you can.${NC}"
+    fi
+    echo
+    exit 0
+  fi
+
   # everything the person could act on; sessions are informational only
   CANDIDATES=$(awk -F'\t' '$3=="reapable" || $3=="needs-dupes-flag"' "$ROWS")
   n=$(printf '%s' "$CANDIDATES" | grep -c . || true)
@@ -603,15 +810,15 @@ if [ "$HUMAN" -eq 1 ]; then
     # Group identical findings. Key = section + what it is + who left it.
     # Aggregate: how many, the worst CPU in the group, the oldest age, the pids.
     ENR=$(mktemp -t machogs-enr) || exit 1
-    while IFS=$'\t' read -r p sec act cpu age detail; do
+    while IFS=$'\t' read -r p sec act cpu age detail csec; do
       [ -n "$p" ] || continue
       alive "$p" || continue
       # "-" not "": tab is IFS whitespace, so bash COLLAPSES an empty field and
       # every column after it shifts left. That reads as a working script right
       # up until it compares a timestamp against a number.
       o=$(whose "$p"); [ -n "$o" ] || o="-"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$sec" "$(whatis "$p")" "$o" "$cpu" "$age" "$p" >> "$ENR"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sec" "$(whatis "$p")" "$o" "$cpu" "$age" "${csec:-0}" "$p" >> "$ENR"
     done < <(printf '%s\n' "$CANDIDATES")
     # Two things that will silently eat the rest of this block if you put them
     # back: a heredoc inside $( ), and a nested $( ) inside this multi-line
@@ -620,11 +827,14 @@ if [ "$HUMAN" -eq 1 ]; then
     awk -F'\t' '
       { k=$1 "\t" $2 "\t" $3
         cnt[k]++
-        if (!(k in cpu)) cpu[k]=0
+        if (!(k in cpu)) { cpu[k]=0; scpu[k]=0; scsec[k]=0 }
         if ($4+0 > cpu[k]+0) cpu[k]=$4+0
+        scpu[k]  += $4+0          # total CPU% the whole group is holding
+        scsec[k] += $6+0          # total CPU seconds the group has burned
         if (length($5) > length(age[k]) || (length($5)==length(age[k]) && $5>age[k])) age[k]=$5
-        pids[k] = (k in pids ? pids[k] " " : "") $6 }
-      END { for (k in cnt) print k "\t" cnt[k] "\t" cpu[k] "\t" age[k] "\t" pids[k] }
+        pids[k] = (k in pids ? pids[k] " " : "") $7 }
+      END { for (k in cnt) printf "%s\t%d\t%s\t%s\t%.1f\t%d\t%s\n",
+              k, cnt[k], cpu[k], age[k], scpu[k], scsec[k], pids[k] }
     ' "$ENR" | sort -t"$TAB" -k5,5nr > "$GRP"
     rm -f "$ENR"
     ngroups=$(wc -l < "$GRP" | tr -d ' ')
@@ -642,8 +852,8 @@ if [ "$HUMAN" -eq 1 ]; then
     fi
     echo
 
-    i=0; closed=0
-    while IFS=$'\t' read -r sec what owner count cpu age pidlist; do
+    i=0; closed=0; freed_cpu=0; freed_csec=0
+    while IFS=$'\t' read -r sec what owner count cpu age scpu scsec pidlist; do
       [ -n "$sec" ] || continue
       i=$((i+1))
       [ "$MODE" = fix ] && echo "${DIM}${i} of ${ngroups}${NC}"
@@ -662,9 +872,11 @@ if [ "$HUMAN" -eq 1 ]; then
               alive "$p" || continue
               if kill -9 "$p" 2>/dev/null; then
                 closed=$((closed+1))
-                echo "$(date '+%F %T') closed $p — $what ($owner)" >> "$LOG"
+                logclose "$p" "$owner" "$what" "$cpu" "$scsec"
               fi
             done
+            freed_cpu=$(awk -v a="$freed_cpu" -v b="$scpu" 'BEGIN{printf "%.1f", a+b}')
+            freed_csec=$((freed_csec + scsec))
             echo "  ${GRN}Closed.${NC}" ;;
           *) echo "  ${DIM}Left alone.${NC}" ;;
         esac
@@ -674,7 +886,7 @@ if [ "$HUMAN" -eq 1 ]; then
 
     if [ "$MODE" = fix ]; then
       if [ "$closed" -gt 0 ]; then
-        echo "${GRN}${BLD}Closed ${closed} program(s).${NC}"
+        receipt "$freed_cpu" "$freed_csec" "$closed"
         [ "${hot:-0}" -gt 0 ] && echo "Your fan should quiet down over the next few minutes."
       else
         echo "${DIM}Nothing was closed.${NC}"
