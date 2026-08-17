@@ -1,23 +1,30 @@
-# Driving mac-cleanup as an agent
+# Driving machogs as an agent
 
 Instructions for coding agents (Claude Code, Codex, Cursor, and friends) asked
 to work out why a Mac is slow or its fan is loud.
 
 ## The tool
 
-`mac-cleanup` inspects running processes and reports the ones worth killing. It
+`machogs` inspects running processes and reports the ones worth killing. It
 deletes no files. Report mode is the default; killing always requires an
 explicit `kill` argument.
 
 ## Use this workflow
 
-1. `mac-cleanup --json --sessions` — always start here. It kills nothing.
+1. `machogs --json --sessions` — always start here. It closes nothing.
 2. Read `findings`. Tell the user what you found in plain language: what the
-   process is, how much CPU it is burning, how long it has been doing it.
-3. **Ask before killing.** Wait for the user to agree.
-4. `mac-cleanup kill --json` (add `--dupes` if duplicate MCP servers are part
-   of what the user agreed to).
-5. Report what actually died — re-read `findings` and check `action`.
+   program is, how much CPU it is burning, how long it has been doing it.
+   `detail` already names the app that left it behind — use that, not the pid.
+3. **Ask before closing anything.** Wait for the user to agree.
+4. Then either:
+   - hand control back with `machogs fix`, which asks the user about each item
+     itself (best when the user is at the keyboard), or
+   - `machogs kill --json` (add `--dupes` if duplicate servers are part of what
+     the user agreed to) when you are acting for them.
+5. Report what actually closed — re-read `findings` and check `action`.
+
+Note: `machogs fix` needs a real terminal and will refuse to run without one.
+Use `machogs kill` for unattended work.
 
 ## Never do these
 
@@ -29,6 +36,9 @@ explicit `kill` argument.
 - **Never claim the machine is fixed because processes died.** If
   `host.swap_pct` is above 80, the machine is thrashing and only a reboot
   fixes it. Say so.
+- **Never say idle findings were making the fan spin.** Check `cpu`. If
+  everything found is near zero, they were wasting memory, not heating the
+  machine. Say that instead — the user will notice if the fan does not change.
 - **Never lower the thresholds to make findings appear.** `HOT_CPU` and
   `SPIN_CPU_SECONDS` exist for testing the detector. Lowering them in real use
   turns busy processes into false positives you will then kill.
@@ -85,7 +95,7 @@ Enough to act on without parsing anything.
 
 ## Verifying the safety net
 
-If a user doubts the tool, run `mac-cleanup --check`. It lists every automation
+If a user doubts the tool, run `machogs --check`. It lists every automation
 process and whether the script would refuse to kill it, and why. It kills
 nothing. Anything owned by Claude Code must read `PROTECTED`.
 

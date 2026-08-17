@@ -1,11 +1,16 @@
 #!/bin/bash
-# mac-cleanup — find and clean up the junk that spins your fan.
+# machogs — find out what is hogging your Mac.
 #
-#   mac-cleanup                 report only (default, never kills anything)
-#   mac-cleanup kill            kill the SAFE categories (orphans, leaks, zombies)
-#   mac-cleanup kill --dupes    also kill duplicate MCP servers (keeps newest per app)
-#   mac-cleanup --sessions      report idle Claude Code sessions too
-#   mac-cleanup --json          machine-readable output, for agents (see below)
+# Slow, hot, loud fan, battery gone by lunch: usually one program eating a CPU
+# core that nobody is using any more. This finds it and tells you in plain words.
+#
+#   machogs                 plain answer (default, never closes anything)
+#   machogs fix             go through them one at a time, asking before each
+#   machogs --details       the technical report, by category
+#   machogs kill            close everything reapable, no questions (scripts)
+#   machogs kill --dupes    also close duplicate MCP servers (keeps newest)
+#   machogs --sessions      list Claude Code sessions too (never closed)
+#   machogs --json          machine-readable output, for agents (see below)
 #
 # FOR AGENTS: `--json` prints one JSON object on stdout and nothing else, so it
 # can be parsed without scraping colours or column layout. Exit codes carry the
@@ -27,14 +32,15 @@
 # TIME rather than parentage: hot right now AND hours of CPU burned = stuck.
 #
 # Supersedes debug-bun (bun + zombie apps only). Logs kills to
-# ~/Library/Logs/mac-cleanup.log
+# ~/Library/Logs/machogs.log
 set -uo pipefail
 
 # ---- config ---------------------------------------------------------------
 # Both are env-overridable so the detector can be exercised without waiting
-# four hours for a real spinner:  SPIN_CPU_SECONDS=5 mac-cleanup
+# four hours for a real spinner:  SPIN_CPU_SECONDS=5 machogs
 HOT_CPU=${HOT_CPU:-50}                 # %CPU above which a process counts as hot
 SPIN_CPU_SECONDS=${SPIN_CPU_SECONDS:-14400}  # 4h CPU + hot now = stuck, not busy
+ORPHAN_MIN_SECONDS=${ORPHAN_MIN_SECONDS:-300} # an orphan must have lasted 5 min
 IDLE_SESSION_MINS=180      # a Claude Code session idle this long gets flagged
 # Processes that legitimately pin a core for hours. Matched against ucomm.
 NEVER_SPIN="WindowServer|kernel_task|launchd|ffmpeg|HandBrake|Compressor|backupd|mds|mds_stores|mdworker|photoanalysisd"
@@ -46,33 +52,156 @@ HEADLESS_PATTERNS="chrome-headless-shell|--headless"
 # servers, even when their --user-data-dir path happens to contain "mcp".
 NOT_MCP="--type=|Google Chrome|Chromium|chrome-headless-shell"
 
-LOG="$HOME/Library/Logs/mac-cleanup.log"
+LOG="$HOME/Library/Logs/machogs.log"
+TAB=$'\t'
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'
 DIM=$'\033[2m'; BLD=$'\033[1m'; NC=$'\033[0m'
 [ -t 1 ] || { RED=; GRN=; YLW=; BLU=; DIM=; BLD=; NC=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
+    fix)         MODE=fix ;;
     --dupes)     DUPES=1 ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
-    -h|--help)   sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --details)   DETAILS=1 ;;
+    -h|--help)   sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
 
+# `fix` confirms every single close with the person sitting there, so the
+# --dupes gate is redundant: it exists to stop unattended runs reaping things
+# nobody looked at. An attended run looks at all of them.
+[ "$MODE" = fix ] && DUPES=1
+
+# Plain language is the default. --details, --json and --check are the ways to
+# ask for the technical view instead.
+HUMAN=1
+if [ "$DETAILS" -eq 1 ] || [ "$JSON" -eq 1 ] || [ "$MODE" = check ]; then HUMAN=0; fi
+if [ "$MODE" = fix ]; then HUMAN=1; fi
+
+if [ "$MODE" = fix ] && [ ! -t 0 ]; then
+  echo "machogs fix needs a terminal to ask you questions." >&2
+  echo "For unattended use run: machogs kill" >&2
+  exit 2
+fi
+
 # Findings are always recorded to a scratch file, whether or not --json was
 # asked for; it costs nothing and keeps the reporting code in one place.
-ROWS=$(mktemp -t mac-cleanup-rows) || exit 1
-trap 'rm -f "$ROWS"' EXIT
+ROWS=$(mktemp -t machogs-rows) || exit 1
+GRP=$(mktemp -t machogs-groups) || exit 1
+trap 'rm -f "$ROWS" "$GRP"' EXIT
 
 # row <pid> <category> <action> <cpu> <age> <detail>
 # Tab-separated. Nothing here may contain a tab or newline; the fields are all
 # pids, numbers, and process names, so that holds.
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$ROWS"; }
+
+# ---- plain language -------------------------------------------------------
+# Everything below exists to answer one question a normal person actually asks:
+# "what is this thing and is it safe to close?" A pid and a percentage do not
+# answer that. The name of the app that left it behind does.
+
+# Two separate questions, because the answers come from different places:
+# WHAT is this thing, and WHICH APP left it here. "node" answers neither.
+# The owning app is the useful half — it is the thing the person recognises
+# and, usually, the thing they should quit or update.
+
+hay_for() {
+  local pid=$1
+  printf '%s %s %s' \
+    "$(ps -o command= -p "$pid" 2>/dev/null)" \
+    "$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}')" \
+    "$(ps -o command= -p "$(root_of "$pid")" 2>/dev/null)"
+}
+
+# Which app is responsible. Checked before what-it-is, because an app name
+# beats a category every time.
+whose() {
+  case "$(hay_for "$1")" in
+    *ChatGPT*)                  echo "ChatGPT" ;;
+    *[Cc]odex*)                 echo "Codex" ;;
+    *.claude/plugins*)          echo "a Claude Code plugin" ;;
+    *claude-code*|*Claude.app*) echo "Claude Code" ;;
+    *Cursor*)                   echo "Cursor" ;;
+    *[Ww]indsurf*)              echo "Windsurf" ;;
+    *Visual\ Studio\ Code*|*/Code\ Helper*) echo "VS Code" ;;
+    *) echo "" ;;
+  esac
+}
+
+# What kind of thing it is, in words rather than process names.
+whatis() {
+  local pid=$1
+  case "$(hay_for "$pid")" in
+    *playwright*)          echo "browser-control helper" ;;
+    *chrome-headless*)     echo "hidden browser window" ;;
+    *mcp*|*modelcontext*)  echo "AI tool helper" ;;
+    *crashpad*)            echo "crash reporter" ;;
+    *) local n; n=$(ps -o ucomm= -p "$pid" 2>/dev/null | sed 's/ *$//')
+       echo "${n:-background program}" ;;
+  esac
+}
+
+# etime -> seconds. Formats: "00:01", "01:29:07", "04-01:37:50".
+etime_secs() {
+  echo "$1" | awk -F- '
+    { t = (NF==2 ? $2 : $1); d = (NF==2 ? $1 : 0)
+      n = split(t, a, ":")
+      s = (n==3 ? a[1]*3600 + a[2]*60 + a[3] : a[1]*60 + a[2])
+      printf "%d", d*86400 + s }'
+}
+
+# "04-01:37:50" (4 days) or "01:29:07" (1.5 hours) -> words.
+plain_age() {
+  case "$1" in
+    *-*) echo "$(echo "$1" | cut -d- -f1) days" ;;
+    *:*:*) echo "$(echo "$1" | cut -d: -f1) hours" ;;
+    *) echo "$(echo "$1" | cut -d: -f1) minutes" ;;
+  esac
+}
+
+# What a section means for the person, not for the process table.
+why_line() {
+  case "$1" in
+    1)  echo "It kept running after the app that started it closed." ;;
+    1b) echo "It is stuck in a loop. Nothing is waiting for it." ;;
+    2)  echo "The app that started it is gone, but it never stopped." ;;
+    2b) echo "A duplicate. One app started the same helper many times over." ;;
+    3)  echo "A hidden browser window nobody is looking at." ;;
+    4)  echo "The app was closed, but this piece of it stayed behind." ;;
+    *)  echo "" ;;
+  esac
+}
+
+# One GROUP of identical findings, as a few lines of English. Seven copies of
+# the same leaked helper is one problem, not seven, and reading it seven times
+# teaches the person nothing.
+say_group() {
+  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6
+  [ "$owner" = "-" ] && owner=""
+  local head="$what"
+  [ "$count" -gt 1 ] && head="$what ${DIM}× ${count}${NC}"
+  if [ -n "$owner" ]; then
+    echo "  ${BLD}${head}${NC} ${DIM}— left by ${owner}${NC}"
+  else
+    echo "  ${BLD}${head}${NC}"
+  fi
+  local ci=${cpu%.*}
+  if [ "${ci:-0}" -ge 20 ]; then
+    echo "  Eating ${RED}${cpu}%${NC} of a CPU core. Running for $(plain_age "$age")."
+  elif [ "$count" -gt 1 ]; then
+    echo "  Idle, but holding memory. Oldest has sat there $(plain_age "$age")."
+  else
+    echo "  Idle, but holding memory. Sitting there $(plain_age "$age")."
+  fi
+  local why; why=$(why_line "$sec")
+  [ -n "$why" ] && echo "  ${DIM}${why}${NC}"
+}
 
 # Minimal JSON string escaping: backslash and double quote only. No control
 # characters can reach here — every value is a pid, number, or process name.
@@ -138,7 +267,7 @@ protected() {
 # --check: prove the safety net works. Lists every automation process and
 # whether the script would refuse to kill it, and why. Kills nothing.
 if [ "$MODE" = check ]; then
-  echo "${BLD}=== mac-cleanup --check ===${NC}  ${DIM}safety audit, kills nothing${NC}"
+  echo "${BLD}=== machogs --check ===${NC}  ${DIM}safety audit, kills nothing${NC}"
   echo "  own ancestry protected : $(echo $SELF_SAFE | wc -w | tr -d ' ') pids"
   echo "  Claude Code protected  : $(echo $CLAUDE_SAFE | wc -w | tr -d ' ') pids"
   echo
@@ -155,11 +284,11 @@ if [ "$MODE" = check ]; then
   exit 0
 fi
 
-# --check is a human audit and prints its own report, so the JSON redirect goes
-# in below it. In --json mode the human report still runs — it is simply sent
-# to /dev/null, so the two output paths can never drift apart. Real stdout is
-# parked on fd 4 and restored at the end to print the JSON.
-if [ "$JSON" -eq 1 ]; then exec 4>&1 1>/dev/null; fi
+# --check is a human audit and prints its own report, so the redirect goes in
+# below it. In --json and plain-language modes the technical report still runs
+# — it is simply sent to /dev/null, so the output paths can never drift apart.
+# Real stdout is parked on fd 4 and restored at the end.
+if [ "$JSON" -eq 1 ] || [ "$HUMAN" -eq 1 ]; then exec 4>&1 1>/dev/null; fi
 
 KILLED=0; FOUND=0; KILLED_PIDS=""
 declare -a KILL_LIST=()
@@ -215,7 +344,7 @@ load=$(uptime | sed 's/.*load averages*: *//' | awk '{print $1}' | tr -d ',')
 swap_tot=$(sysctl -n vm.swapusage  | awk '{print $3}' | tr -d 'M')
 swap_used=$(sysctl -n vm.swapusage | awk '{print $6}' | tr -d 'M')
 
-echo "${BLD}=== mac-cleanup ===${NC}  ${DIM}$(date '+%F %H:%M')  ·  mode: $MODE${NC}"
+echo "${BLD}=== machogs ===${NC}  ${DIM}$(date '+%F %H:%M')  ·  mode: $MODE${NC}"
 hdr "System"
 loadint=${load%.*}
 if [ "${loadint:-0}" -gt "$cores" ]; then
@@ -237,6 +366,11 @@ found_any=0
 while read -r pid ppid cpu cmd; do
   [ "$ppid" = "1" ] || continue
   ci=${cpu%.*}; [ "${ci:-0}" -ge "$HOT_CPU" ] || continue
+  # A process that started seconds ago is busy, not abandoned. Every launch
+  # spikes. Without this, ordinary system daemons get flagged the moment they
+  # start doing their job.
+  [ "$(etime_secs "$(etime_of "$pid")")" -ge "$ORPHAN_MIN_SECONDS" ] || continue
+  echo "$(comm_of "$pid" | short)" | grep -qE "$NEVER_SPIN" && continue
   cwd=$(lsof -p "$pid" -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}')
   queue "$pid" "orphan $(echo "$cmd" | short) ${cwd:+[$(echo "$cwd" | sed "s|$HOME|~|")]}"
   found_any=1
@@ -410,7 +544,7 @@ else
   if [ $FOUND -eq 0 ]; then
     echo "${GRN}${BLD}Clean.${NC} nothing to reap."
   else
-    echo "${BLD}Found $FOUND reapable process(es).${NC} run ${BLD}mac-cleanup kill${NC} to clean up."
+    echo "${BLD}Found $FOUND reapable process(es).${NC} run ${BLD}machogs kill${NC} to clean up."
   fi
 fi
 [ "$swap_pct" -gt 80 ] && echo "${YLW}Note:${NC} swap is ${swap_pct}% full — a restart is the only real fix for that."
@@ -438,6 +572,139 @@ if [ "$JSON" -eq 1 ]; then
   done < "$ROWS"
   [ $first -eq 0 ] && printf '\n'
   printf '  ]\n}\n'
+fi
+
+# ---- plain-language report and guided fix ---------------------------------
+if [ "$HUMAN" -eq 1 ]; then
+  exec 1>&4 4>&-
+  # everything the person could act on; sessions are informational only
+  CANDIDATES=$(awk -F'\t' '$3=="reapable" || $3=="needs-dupes-flag"' "$ROWS")
+  n=$(printf '%s' "$CANDIDATES" | grep -c . || true)
+
+  echo
+  if [ "${n:-0}" -eq 0 ]; then
+    echo "${GRN}${BLD}Nothing is hogging your Mac.${NC}"
+    echo "No stuck or abandoned programs are running."
+    if [ "$swap_pct" -gt 80 ]; then
+      echo
+      echo "${YLW}But your Mac has run out of fast memory.${NC}"
+      echo "It has been on for $(uptime | sed -n 's/.*up \([0-9]*\) day.*/\1/p' | head -1) days and is now"
+      echo "shuffling memory to disk, which makes everything slow."
+      echo "${BLD}Restart it.${NC} That is the only thing that fixes this."
+    elif [ "${loadint:-0}" -gt "$cores" ]; then
+      echo
+      echo "Your Mac is busy, but every program running is one you are using."
+      echo "Close a few apps or browser tabs."
+    else
+      echo "If it still feels slow or hot, the cause is something else —"
+      echo "check for a big download, a backup, or Spotlight rebuilding."
+    fi
+  else
+    # Group identical findings. Key = section + what it is + who left it.
+    # Aggregate: how many, the worst CPU in the group, the oldest age, the pids.
+    ENR=$(mktemp -t machogs-enr) || exit 1
+    while IFS=$'\t' read -r p sec act cpu age detail; do
+      [ -n "$p" ] || continue
+      alive "$p" || continue
+      # "-" not "": tab is IFS whitespace, so bash COLLAPSES an empty field and
+      # every column after it shifts left. That reads as a working script right
+      # up until it compares a timestamp against a number.
+      o=$(whose "$p"); [ -n "$o" ] || o="-"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sec" "$(whatis "$p")" "$o" "$cpu" "$age" "$p" >> "$ENR"
+    done < <(printf '%s\n' "$CANDIDATES")
+    # Two things that will silently eat the rest of this block if you put them
+    # back: a heredoc inside $( ), and a nested $( ) inside this multi-line
+    # substitution. Both cost an hour to find. TAB is a plain variable for
+    # exactly that reason.
+    awk -F'\t' '
+      { k=$1 "\t" $2 "\t" $3
+        cnt[k]++
+        if (!(k in cpu)) cpu[k]=0
+        if ($4+0 > cpu[k]+0) cpu[k]=$4+0
+        if (length($5) > length(age[k]) || (length($5)==length(age[k]) && $5>age[k])) age[k]=$5
+        pids[k] = (k in pids ? pids[k] " " : "") $6 }
+      END { for (k in cnt) print k "\t" cnt[k] "\t" cpu[k] "\t" age[k] "\t" pids[k] }
+    ' "$ENR" | sort -t"$TAB" -k5,5nr > "$GRP"
+    rm -f "$ENR"
+    ngroups=$(wc -l < "$GRP" | tr -d ' ')
+    # is anything actually burning CPU, or is this all idle clutter?
+    hot=$(awk -F'\t' '$5+0 >= 20' "$GRP" | wc -l | tr -d ' ')
+
+    if [ "$MODE" = fix ]; then
+      echo "${BLD}Found ${ngroups} thing(s) worth closing.${NC}"
+      echo "${DIM}I will ask before each one. Nothing closes unless you say yes.${NC}"
+    elif [ "${hot:-0}" -gt 0 ]; then
+      echo "${BLD}Something is hogging your Mac.${NC}"
+    else
+      echo "${BLD}Nothing is eating your CPU right now.${NC}"
+      echo "${DIM}But ${n} abandoned program(s) are sitting in memory.${NC}"
+    fi
+    echo
+
+    i=0; closed=0
+    while IFS=$'\t' read -r sec what owner count cpu age pidlist; do
+      [ -n "$sec" ] || continue
+      i=$((i+1))
+      [ "$MODE" = fix ] && echo "${DIM}${i} of ${ngroups}${NC}"
+      say_group "$sec" "$what" "$owner" "$count" "$cpu" "$age"
+      if [ "$MODE" = fix ]; then
+        echo
+        if [ "$count" -gt 1 ]; then
+          printf "  Close all %s? [y/N] " "$count"
+        else
+          printf "  Close it? [y/N] "
+        fi
+        read -r ans </dev/tty
+        case "$ans" in
+          y|Y|yes|YES)
+            for p in $pidlist; do
+              alive "$p" || continue
+              if kill -9 "$p" 2>/dev/null; then
+                closed=$((closed+1))
+                echo "$(date '+%F %T') closed $p — $what ($owner)" >> "$LOG"
+              fi
+            done
+            echo "  ${GRN}Closed.${NC}" ;;
+          *) echo "  ${DIM}Left alone.${NC}" ;;
+        esac
+      fi
+      echo
+    done < "$GRP"
+
+    if [ "$MODE" = fix ]; then
+      if [ "$closed" -gt 0 ]; then
+        echo "${GRN}${BLD}Closed ${closed} program(s).${NC}"
+        [ "${hot:-0}" -gt 0 ] && echo "Your fan should quiet down over the next few minutes."
+      else
+        echo "${DIM}Nothing was closed.${NC}"
+      fi
+    else
+      # Only claim the symptoms something is actually causing.
+      if [ "${hot:-0}" -gt 0 ]; then
+        echo "${BLD}This is why your Mac feels slow, runs hot, spins its fan,${NC}"
+        echo "${BLD}and loses battery faster than it should.${NC}"
+      else
+        echo "These are not making your fan spin — none of them are busy."
+        echo "They waste memory, which matters once memory runs short."
+      fi
+      echo
+      echo "To go through them one at a time:  ${BLD}machogs fix${NC}"
+      echo "${DIM}Nothing is closed unless you say yes.${NC}"
+    fi
+
+    if [ "$swap_pct" -gt 80 ]; then
+      echo
+      echo "${YLW}Also:${NC} your Mac has been on for $(uptime | sed -n 's/.*up \([0-9]*\) day.*/\1/p' | head -1) days and is out of fast memory."
+      echo "Closing programs will not fix that part. ${BLD}Restart when you can.${NC}"
+    fi
+  fi
+  echo
+
+  # kills in fix mode are counted here, not by flush_kills
+  KILLED=$((KILLED + ${closed:-0}))
+  if [ "$MODE" = report ] && [ "${n:-0}" -gt 0 ]; then exit 10; fi
+  exit 0
 fi
 
 # Exit code is the verdict, so a caller need not parse anything at all.

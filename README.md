@@ -1,103 +1,156 @@
-# mac-cleanup
+# machogs
 
-Your Mac's fan is loud. Activity Monitor shows a wall of processes and nothing
-obviously wrong. Something is spinning and you have no idea what.
-
-`mac-cleanup` finds it, tells you what it is, and only kills it if you say so.
-
-It was written after a plugin server sat at 90% of a CPU core for **four days**
-without anyone noticing — 91 hours of CPU burned by a process nobody was
-talking to anymore.
+**Your Mac is slow, hot, and loud. This tells you what is doing it, in plain English.**
 
 ```
-$ mac-cleanup
+$ machogs
 
-=== mac-cleanup ===  mode: report
+  Something is hogging your Mac.
 
-System
-  load 10.74 on 10 cores
-  swap 16080M / 17408M (92%)  <- thrashing, reboot to clear
-  uptime 20 days, 19:08
+  bun — left by a Claude Code plugin
+  Eating 98% of a CPU core. Running for 4 days.
+  It is stuck in a loop. Nothing is waiting for it.
 
-1. Orphaned runaways  (parent died, still burning CPU)
-  none
+  This is why your Mac feels slow, runs hot, spins its fan,
+  and loses battery faster than it should.
 
-1b. Stuck spinners  (parent alive, but burning CPU for hours)
-    69342   cpu=98.7% age=04-01:37     spinning 91h23m of CPU — bun [~/.claude/plugins/telegram]
-    69340   cpu=0.0%  age=04-01:37       idle wrapper of 69342 (bun)
-
-2b. Duplicate MCP servers  (same app spawned many, keeps newest)
-    57377   cpu=0.0%  age=01:00:03     duplicate playwright-mcp under ChatGPT (--dupes to kill)
-    75904   cpu=0.0%  age=16:05        duplicate playwright-mcp under ChatGPT (--dupes to kill)
-
-Found 4 reapable process(es). run mac-cleanup kill to clean up.
+  To go through them one at a time:  machogs fix
+  Nothing is closed unless you say yes.
 ```
 
-## This will not eat your homework
+That one is real. It ran for four days at ninety percent of a CPU core. It
+burned 91 hours of processor time. Nobody opened it, nobody used it, and
+nothing on the machine said a word about it.
 
-It sends `kill -9`. That deserves your suspicion, so here is exactly what stops
-it hurting you:
+---
 
-- **Report mode is the default.** Plain `mac-cleanup` never kills anything.
-  `kill` is always typed out by you.
-- **It will never kill a coding session.** Claude Code sessions are listed and
-  explicitly skipped, along with every MCP server belonging to a live one. You
-  do not lose unsaved work.
-- **It will never kill its own ancestry.** The script cannot shoot the shell
-  it is running in.
-- **It touches only your own processes.** Root-owned system daemons
-  (`WindowServer`, `kernel_task`, Spotlight, Time Machine) are out of scope.
-- **Things that pin a core for a living are exempt** — `ffmpeg`, HandBrake,
-  Compressor and friends are on a never-touch list.
-- **Every kill is logged** to `~/Library/Logs/mac-cleanup.log`.
+## Why is my Mac fan so loud?
 
-You can audit the safety net yourself, without killing anything:
+Almost always: one program is stuck using a whole CPU core. The fan is not
+broken. It is doing its job, cooling a chip that something is cooking.
 
-```sh
-mac-cleanup --check
-```
+The hard part is that the program is usually one you never opened and cannot
+name. In Activity Monitor it shows up as `bun`, or `node`, or `Helper (Renderer)`.
+Those names tell you nothing, so most people scroll past and reboot instead.
 
-That lists every automation process on the machine and whether the script would
-refuse to kill it, and why. Anything owned by Claude Code must read `PROTECTED`.
+`machogs` finds it and tells you what it actually is and which app left it there.
+
+## Why is my MacBook so hot?
+
+Same cause, different symptom. A chip running flat out gets hot, and the metal
+case passes that heat to your hands. If your Mac is hot while you are only
+writing an email, something is running that you did not ask for.
+
+## Why is my battery draining so fast?
+
+A stuck program does not sleep. It keeps a CPU core awake, which stops your Mac
+from entering its low-power states. The battery estimate drops from nine hours
+to three, and nothing on screen explains it.
+
+Battery drain is often the first thing people notice. It is the same problem as
+the loud fan, arriving through a different door.
+
+## Why is my Mac suddenly slow?
+
+Two different causes, and it is worth knowing which one you have:
+
+1. **Something is eating the CPU.** `machogs` finds this and can fix it.
+2. **You have run out of fast memory.** Your Mac starts shuffling memory to
+   disk. Everything gets slow and stays slow. Closing programs barely helps.
+
+`machogs` checks both and tells you which one you are looking at. If it is the
+second one, it says so plainly: restart, because nothing else fixes it.
+
+---
+
+## The part that is new
+
+Your Mac used to run the programs you opened. That is no longer true.
+
+Today it runs the programs you opened, the helpers those programs started, the
+AI assistants you gave access to, and the background servers those assistants
+start so they can search the web and read your files. You did not open any of
+them. You cannot name them. Most of them you will never see.
+
+They also leak. On the machine this was written on, ChatGPT left **28 duplicate
+background servers** running in a single afternoon. They were cleaned up, and
+eleven more appeared within the hour. A plugin from an old version of Claude
+Code kept running for four days after the thing that started it had gone.
+
+None of this is anyone's fault exactly. Every AI tool spawns helpers, most clean
+up correctly most of the time, and the failures are quiet. But the result is a
+new kind of slow computer: not old, not full, not broken — just quietly busy
+with work nobody asked for.
+
+Every "clean your Mac" tool ever written deletes caches to free disk space. That
+solves a problem from 2010. `machogs` deletes nothing. It looks at what is
+*running*, and it knows the names of the AI tools that leave things behind.
+
+---
 
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bnishit/mac-cleanup/main/mac-cleanup -o /usr/local/bin/mac-cleanup
-chmod +x /usr/local/bin/mac-cleanup
+curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs
+chmod +x /usr/local/bin/machogs
 ```
 
-Or just clone and copy it anywhere on your `PATH`. It is a single bash file with
-no dependencies — everything it uses (`ps`, `lsof`, `pgrep`, `sysctl`) ships
-with macOS. Works on bash 3.2, the version Apple still bundles.
+One bash file, no dependencies. Everything it uses ships with macOS. To
+uninstall, delete the file.
 
-To uninstall: delete the file.
-
-## Usage
+## Use
 
 ```sh
-mac-cleanup                 # report only — the default, kills nothing
-mac-cleanup kill            # kill the safe categories
-mac-cleanup kill --dupes    # also kill duplicate MCP servers
-mac-cleanup --sessions      # also list idle Claude Code sessions
-mac-cleanup --check         # audit the safety net, kill nothing
-mac-cleanup --json          # machine-readable, for agents
+machogs              # plain answer. Closes nothing.
+machogs fix          # go through them one at a time, asking before each
+machogs --details    # the technical report, by category
+machogs --json       # machine-readable, for agents
+machogs --check      # audit the safety rules, close nothing
+```
+
+`machogs fix` shows you one thing at a time and waits:
+
+```
+1 of 1
+  browser-control helper × 11 — left by ChatGPT
+  Idle, but holding memory. Oldest has sat there 31 minutes.
+  A duplicate. One app started the same helper many times over.
+
+  Close all 11? [y/N]
+```
+
+## This will not eat your homework
+
+It closes programs. That deserves your suspicion, so here is what stops it
+hurting you:
+
+- **It never closes anything on its own.** Running `machogs` only looks. `fix`
+  asks you about every single item.
+- **It will never close a coding session.** Claude Code sessions, and the
+  helpers belonging to a live one, are listed and skipped. You do not lose
+  unsaved work.
+- **It only touches your own programs.** macOS system processes are out of
+  scope entirely.
+- **Programs that are meant to work hard are left alone** — video encoders,
+  backups, Spotlight indexing.
+- **It will not claim credit it has not earned.** If the things it found are
+  idle, it says they are not what is spinning your fan.
+- **Everything it closes is logged** to `~/Library/Logs/machogs.log`.
+
+Check the safety rules yourself, without closing anything:
+
+```sh
+machogs --check
 ```
 
 ## Let your agent drive it
 
-Most people hitting this problem will not be reading a fan-noise script — they
-will be asking Claude Code, Codex, Cursor or a bot to work out why their Mac is
-slow. So the tool is built to be driven, not just typed.
+Most people with a hot laptop will not read a shell script. They will ask Claude
+Code, Codex, Cursor or a bot. So this is built to be driven.
 
-`--json` prints exactly one object on stdout and nothing else, and the exit code
-carries the verdict so a wrapper does not have to parse anything at all:
-
-```sh
-mac-cleanup --json --sessions
-# exit 0  = clean
-# exit 10 = findings a human should look at
-```
+`--json` prints one object and nothing else. The exit code carries the verdict,
+so a wrapper does not have to parse anything: `0` clean, `10` findings worth a
+look, `2` bad arguments.
 
 ```json
 {
@@ -112,72 +165,33 @@ mac-cleanup --json --sessions
 }
 ```
 
-Every finding carries an `action`, so an agent knows what it is allowed to do:
-`reapable`, `needs-dupes-flag`, `protected`, `never-killed`, or `killed`.
+Every finding carries an `action`, so an agent knows what it may touch:
+`reapable`, `needs-dupes-flag`, `protected`, `never-killed`, `killed`.
 
-**[AGENTS.md](AGENTS.md) is the instruction sheet for agents** — the workflow to
-follow, the JSON shape, and the things an agent must not do (chiefly: never kill
-before showing the user, and never work around a `protected` verdict by reaching
-for `kill -9` directly). Point your agent at it, or drop it in your project.
+**[AGENTS.md](AGENTS.md) is the instruction sheet.** It has the workflow, the
+JSON shape, and the rules — chiefly: never close anything before showing the
+person, and never work around a `protected` verdict by reaching for `kill`
+directly.
 
-## What it looks for
+## How it knows something is stuck
 
-| | Category | What it means |
-|---|---|---|
-| 1 | Orphaned runaways | Parent died, process still burning CPU |
-| 1b | Stuck spinners | Parent alive, but hours of CPU burned and still hot |
-| 2 | Leaked automation servers | MCP servers whose owning app is gone |
-| 2b | Duplicate MCP servers | One app spawned the same server over and over |
-| 3 | Stranded headless browsers | Headless Chrome with no live owner |
-| 4 | Zombie app helpers | Cursor/VS Code/Electron helpers left after quitting |
-| 5 | Claude Code sessions | Reported only, never killed |
+The obvious test is to ask whether a program's parent has died. An abandoned
+program pegging the CPU is clearly finished. That test is real, and it is the
+first thing `machogs` checks.
 
-## Why it knows about MCP servers
+It also misses the worst case. A program can spin forever underneath a perfectly
+healthy parent. Nothing looks abandoned, so that test walks straight past a CPU
+core burning at full tilt. This is exactly what hid for four days.
 
-Most "clean your Mac" scripts delete caches. This one does not touch a single
-file — it looks at what is *running*.
+So there is a second test, and it asks something different: **has this burned
+hours of CPU time, and is it still going right now?** Both have to be true. Real
+work burns minutes and finishes. A stuck loop burns hours and never stops.
 
-That matters more than it used to. AI coding tools spawn background servers
-constantly, and they leak. On the machine this was written on, ChatGPT had
-piled up **28 duplicate MCP servers** in an afternoon, and had three more
-within the hour of being cleaned. Nothing else looks for that.
+## What it cannot fix
 
-## How it decides something is stuck
-
-The interesting case is category 1b, and it is worth explaining because it is
-where the naive check fails.
-
-The obvious way to spot a runaway is to ask *"did its parent die?"* — an
-orphaned process pegging the CPU is clearly abandoned. That check is real, and
-it is category 1.
-
-But it misses the worst case. A process can spin forever under a perfectly
-healthy parent. Nothing is orphaned, so parentage tells you nothing, and the
-naive check walks straight past a core burning at 100%. That is exactly what
-hid for four days.
-
-So 1b asks a different question: **has this burned hours of CPU, and is it
-still hot right now?** Both must be true. A compile burns minutes of CPU and
-finishes. A spin loop burns hours and never stops. The default line is 4 hours
-of accumulated CPU while still above 50% — generous enough that ordinary hard
-work never trips it.
-
-When it finds a spinner, it also takes the parent, but only when the parent is
-plainly a leftover wrapper: orphaned itself, and doing nothing. Otherwise a
-supervisor would just restart the thing you killed.
-
-Both thresholds are environment variables, so you can test the detector without
-waiting four hours for a real spinner:
-
-```sh
-HOT_CPU=95 SPIN_CPU_SECONDS=5 mac-cleanup
-```
-
-## What it will not fix
-
-If it tells you swap is 90% full, believe it. Killing processes barely helps at
-that point — the memory is already paged out to disk. A reboot is the only real
-fix, and the script says so rather than pretending otherwise.
+If it tells you your Mac has run out of fast memory, believe it. Closing
+programs barely helps once memory is being shuffled to disk. Restarting is the
+only real fix, and the tool says so instead of pretending otherwise.
 
 ## License
 
