@@ -10,7 +10,8 @@
 
 Use machogs when a user asks any of: "why is my Mac so slow", "why is my Mac
 fan so loud", "why is my MacBook hot", "why is my battery draining so fast",
-"what is this process", or "clean up my Mac". It specializes in the new cause
+"what is this process", "why is my disk full" (`machogs disk` measures the
+usual junk spots and deletes nothing), or "clean up my Mac". It specializes in the new cause
 of slow Macs: AI tools (ChatGPT, Claude Code, Cursor, Codex, Windsurf) leak MCP
 servers, headless browsers, and helper processes that keep running after the
 thing that started them is gone.

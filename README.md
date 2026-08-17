@@ -95,6 +95,32 @@ solves a problem from 2010. `machogs` deletes nothing. It looks at what is
 
 ---
 
+## Why is my Mac storage full?
+
+The CPU has hogs; the disk has dead weight. `machogs disk` is the storage
+X-ray — same promise as everything else here: find it, explain it in plain
+English, and **delete nothing**. You decide; it points.
+
+```
+$ machogs disk
+
+💾 Your disk: 338 GB used of 460 GB (73% full).
+
+  📦 App caches — 21 GB. Safe to clear: Apps rebuild these.
+  📦 npm cache — 13 GB. Safe to clear: npm rebuilds it.
+  🛠️ Old iPhone debug files — 6.5 GB. Check first: dead weight per old iPhone.
+  ⬇️ Downloads — 4.8 GB. Your call: You know what is in there.
+
+machogs deletes nothing. It shows you where the weight is; you decide.
+```
+
+It checks the usual junk spots — Trash, app caches, Xcode build junk, old
+iPhone backups, Docker's disk image, simulators, npm cache, Downloads — and
+only mentions what is actually chunky (0.5 GB+). If the junk spots are clean,
+it says the honest thing: the space is going to your real files.
+
+---
+
 ## Install
 
 ```sh
@@ -124,6 +150,7 @@ machogs              # plain answer. Closes nothing.
 machogs fix          # go through them one at a time, asking before each
 machogs blame        # scoreboard: which app leaves the most junk behind
 machogs brag         # a shareable card of what your Mac has been wasting
+machogs disk         # where your storage went. Deletes nothing.
 machogs --details    # the technical report, by category
 machogs --json       # machine-readable, for agents
 machogs --check      # audit the safety rules, close nothing

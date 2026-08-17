@@ -7,6 +7,7 @@
 // marked protected or never-killed.
 
 import SwiftUI
+import AppKit
 import ServiceManagement
 
 // MARK: - Engine JSON
@@ -47,6 +48,42 @@ struct Report: Codable {
     let findings: [Finding]
 }
 
+// `machogs disk --json` — the storage X-ray. Report-only; nothing is deleted.
+struct DiskInfo: Codable {
+    let used_gb: Int
+    let total_gb: Int
+    let pct: Int
+}
+
+struct DiskItem: Codable, Identifiable {
+    let label: String
+    let icon: String
+    let path: String
+    let size_mb: Int
+    let verdict: String
+    let how: String
+    var id: String { path }
+
+    var sizeText: String {
+        if size_mb >= 10240 { return "\(size_mb / 1024) GB" }
+        if size_mb >= 1024 { return String(format: "%.1f GB", Double(size_mb) / 1024) }
+        return "\(size_mb) MB"
+    }
+    var verdictText: String {
+        switch verdict {
+        case "safe": return "Safe to clear:"
+        case "check": return "Check first:"
+        default: return "Your call:"
+        }
+    }
+}
+
+struct DiskReport: Codable {
+    let mode: String
+    let disk: DiskInfo
+    let items: [DiskItem]
+}
+
 // One card in the UI = one identical story, however many pids share it.
 struct FindingGroup: Identifiable {
     let story: String
@@ -67,6 +104,8 @@ final class Engine: ObservableObject {
     @Published var receipt: String?
     @Published var errorText: String?
     @Published var refreshing = false
+    @Published var diskReport: DiskReport?
+    @Published var diskLoading = false
 
     private var timer: Timer?
     private var started = false
@@ -116,13 +155,14 @@ final class Engine: ObservableObject {
 
     struct EngineError: Error { let message: String }
 
-    nonisolated private static func runEngine() -> Result<Report, EngineError> {
+    // One runner for every engine mode: exit 10 means "findings exist", not failure.
+    nonisolated private static func runJSON<T: Decodable>(_ args: [String], as type: T.Type) -> Result<T, EngineError> {
         guard let script = scriptPath() else {
             return .failure(EngineError(message: "Can't find the machogs engine. Reinstall the app or `brew install bnishit/tap/machogs`."))
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [script, "--json", "--sessions"]
+        p.arguments = [script] + args
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()
@@ -133,14 +173,32 @@ final class Engine: ObservableObject {
         }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        // exit 10 = findings exist; that is a report, not an error
         guard p.terminationStatus == 0 || p.terminationStatus == 10 else {
             return .failure(EngineError(message: "Engine exited with status \(p.terminationStatus)."))
         }
         do {
-            return .success(try JSONDecoder().decode(Report.self, from: data))
+            return .success(try JSONDecoder().decode(T.self, from: data))
         } catch {
             return .failure(EngineError(message: "Couldn't read the engine's report."))
+        }
+    }
+
+    nonisolated private static func runEngine() -> Result<Report, EngineError> {
+        runJSON(["--json", "--sessions"], as: Report.self)
+    }
+
+    func checkDisk() {
+        guard !diskLoading else { return }
+        diskLoading = true
+        Task.detached(priority: .utility) {
+            let result = Self.runJSON(["disk", "--json"], as: DiskReport.self)
+            await MainActor.run {
+                self.diskLoading = false
+                switch result {
+                case .success(let d): self.diskReport = d
+                case .failure(let e): self.errorText = e.message
+                }
+            }
         }
     }
 
@@ -215,10 +273,57 @@ struct ContentView: View {
                 }
             }
             Divider()
+            storage
+            Divider()
             footer
         }
         .padding(14)
         .frame(width: 360)
+    }
+
+    private var storage: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("💾 Storage").font(.headline)
+                Spacer()
+                if engine.diskLoading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(engine.diskReport == nil ? "Check" : "Re-check") { engine.checkDisk() }
+                        .controlSize(.small)
+                }
+            }
+            if let d = engine.diskReport {
+                Text("\(d.disk.used_gb) GB used of \(d.disk.total_gb) GB (\(d.disk.pct)% full)")
+                    .font(.callout)
+                    .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                if d.items.isEmpty {
+                    Text("Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(d.items) { item in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("\(item.icon) \(item.label)").font(.callout)
+                            Spacer()
+                            Text(item.sizeText).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                            Button("Show") {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
+                            }
+                            .controlSize(.mini)
+                        }
+                        Text("\(item.verdictText) \(item.how)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text("Nothing is deleted. It points; you decide.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            } else if !engine.diskLoading {
+                Text("Where did your storage go? Takes ~15 seconds.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var header: some View {

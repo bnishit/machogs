@@ -112,15 +112,20 @@ Duplicate MCP servers are not counted unless `--dupes` was passed, so a run
 reporting `reapable: 0` can still have findings worth showing the user. Read
 `findings`, not just the summary.
 
-## Two extra commands worth surfacing
+## Three extra commands worth surfacing
 
-Both are read-only and touch no processes.
+All read-only; none touch processes or files.
 
 - `machogs blame` — a scoreboard of which app leaves the most behind on this
   machine, built from the log over time. Useful when the user asks "why does
   this keep happening?"
 - `machogs brag` — the same totals as a card the user can paste somewhere.
   Offer it only if they seem pleased; never push it.
+- `machogs disk` (or `machogs disk --json`) — the storage X-ray for "why is my
+  disk full?". Measures the usual junk spots (caches, Docker image, iPhone
+  backups, Xcode junk, Trash, Downloads) with a `verdict` per item: `safe`,
+  `check`, or `yours`. It DELETES NOTHING and neither should you — relay the
+  `how` field and let the user do the deleting themselves. Takes ~15s.
 
 The log they read is `~/Library/Logs/machogs.log`, one tab-separated line per
 close: time, pid, app to blame, what it was, CPU%, CPU seconds.

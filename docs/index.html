@@ -42,7 +42,9 @@
     {"@type": "Question", "name": "Why is my Mac battery draining so fast?",
      "acceptedAnswer": {"@type": "Answer", "text": "A stuck program never sleeps. It keeps a CPU core awake, which stops your Mac entering its low-power states. The battery estimate drops from nine hours to three and nothing on screen explains why. It is the same problem as the loud fan, arriving through a different door."}},
     {"@type": "Question", "name": "Why is my Mac suddenly slow?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Two causes: either something is eating the CPU (machogs finds and fixes this), or your Mac has run out of fast memory and is shuffling memory to disk — in which case closing programs barely helps and a restart is the only real fix. machogs checks both and tells you which one you have."}}
+     "acceptedAnswer": {"@type": "Answer", "text": "Two causes: either something is eating the CPU (machogs finds and fixes this), or your Mac has run out of fast memory and is shuffling memory to disk — in which case closing programs barely helps and a restart is the only real fix. machogs checks both and tells you which one you have."}},
+    {"@type": "Question", "name": "Why is my Mac storage full?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Usually dead weight in predictable places: app caches, Docker's disk image, old iPhone backups, Xcode build junk, npm caches, the Trash, and Downloads. machogs disk measures the usual junk spots, tells you in plain English which are safe to clear and how, and deletes nothing itself — you decide."}}
   ]
 }
 </script>
@@ -303,9 +305,9 @@ Caught in 4K.</p>
     <div class="stat"><span class="n">🧠</span><span class="t"><b>Memory squatters.</b> Idle leftovers sitting on RAM they'll never use again.</span></div>
     <div class="stat"><span class="n">🌡️</span><span class="t"><b>The real diagnosis.</b> If your Mac is actually out of fast memory, it says so straight: restart, nothing else fixes it.</span></div>
   </div>
-  <p class="dim">What it will NOT do: delete your files, "clean" caches, or free disk space.
-  Disk space is a 2010 problem — every other cleaner app already fights over it.
-  machogs only deals with what is <em>running</em>.</p>
+  <p class="dim">What it will NOT do: delete your files. Ever. Even <b>machogs disk</b>,
+  the storage X-ray, only maps where your disk space went — Docker images, old iPhone
+  backups, caches — and says what is safe to clear. The deleting stays in your hands.</p>
 </section>
 
 <section class="faq">
@@ -335,6 +337,12 @@ Caught in 4K.</p>
   <b>you have run out of fast memory</b> and your Mac is shuffling memory to disk, in
   which case closing programs barely helps and machogs will tell you plainly: restart,
   because nothing else fixes it.</p>
+
+  <h3>Why is my Mac storage full?</h3>
+  <p>Usually dead weight in predictable places: app caches, <b>Docker's disk image</b>,
+  old iPhone backups, Xcode build junk, npm caches, the Trash, Downloads.
+  <b>machogs disk</b> is the storage X-ray — it measures the usual junk spots and tells
+  you which are safe to clear and how. It deletes nothing itself. It points; you decide.</p>
 </section>
 
 <section>

@@ -8,6 +8,7 @@
 #   machogs fix             go through them one at a time, asking before each
 #   machogs blame           scoreboard: which app leaves the most junk behind
 #   machogs brag            a shareable card of what your Mac has wasted
+#   machogs disk            where your storage went (report-only, deletes nothing)
 #   machogs --details       the technical report, by category
 #   machogs kill            close everything reapable, no questions (scripts)
 #   machogs kill --dupes    also close duplicate MCP servers (keeps newest)
@@ -74,12 +75,13 @@ for a in "$@"; do
     fix)         MODE=fix ;;
     blame)       MODE=blame ;;
     brag)        MODE=brag ;;
+    disk)        MODE=disk ;;
     --dupes)     DUPES=1 ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
     --details)   DETAILS=1 ;;
-    -h|--help)   sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -475,6 +477,83 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
     echo "${DIM}Copy the block above. That is the post.${NC}"
     echo
   fi
+  exit 0
+fi
+
+# ---- disk: where the storage went ------------------------------------------
+# The storage X-ray. Same promise as the CPU side: find it, explain it in
+# plain words, let the person decide. This mode DELETES NOTHING, ever — it
+# points at the weight and says which of it is safe to clear and how.
+if [ "$MODE" = disk ]; then
+  # On APFS the free space is shared across the container, so read the Data
+  # volume: its "avail" is the real free space the person has left.
+  set -- $(df -k /System/Volumes/Data 2>/dev/null | tail -1)
+  blocks=${2:-0}; avail=${4:-0}
+  if [ "${blocks:-0}" -eq 0 ]; then set -- $(df -k / | tail -1); blocks=${2:-0}; avail=${4:-0}; fi
+  usedk=$((blocks - avail)); pct=$(( blocks > 0 ? usedk * 100 / blocks : 0 ))
+  gbint() { awk -v k="${1:-0}" 'BEGIN{printf "%.0f", k/1048576}'; }
+  gbone() { awk -v k="${1:-0}" 'BEGIN{ g=k/1048576; if (g>=10) printf "%.0f GB", g; else printf "%.1f GB", g }'; }
+
+  # The usual suspects. label|icon|path|verdict|how
+  # verdict: safe (clearing costs you nothing lasting), check (look first), yours (only you know)
+  SUSPECTS="Trash|🗑️|$HOME/.Trash|safe|Finder → Empty Trash.
+App caches|📦|$HOME/Library/Caches|safe|Apps rebuild these. First launches may be slower once.
+Xcode build junk|🛠️|$HOME/Library/Developer/Xcode/DerivedData|safe|Xcode rebuilds it on the next build.
+Old iPhone debug files|🛠️|$HOME/Library/Developer/Xcode/iOS DeviceSupport|check|Debug files per iPhone model. Old ones are dead weight.
+iPhone backups|📱|$HOME/Library/Application Support/MobileSync/Backup|check|Finder → Manage Backups. Keep phones you still own.
+Docker's disk image|🐳|$HOME/Library/Containers/com.docker.docker/Data|check|Docker Desktop: prune unused images, or shrink it in Settings.
+iOS Simulators|🛠️|$HOME/Library/Developer/CoreSimulator|check|'xcrun simctl delete unavailable' clears dead simulators.
+npm cache|📦|$HOME/.npm|safe|npm rebuilds it: npm cache clean --force
+Downloads|⬇️|$HOME/Downloads|yours|You know what is in there."
+
+  FOUND=$(printf '%s\n' "$SUSPECTS" | while IFS='|' read -r label icon path verdict how; do
+    [ -e "$path" ] || continue
+    sizek=$(du -sk "$path" 2>/dev/null | cut -f1)
+    [ "${sizek:-0}" -ge 524288 ] || continue     # only worth saying at 0.5 GB+
+    printf '%s|%s|%s|%s|%s|%s\n' "$sizek" "$label" "$icon" "$path" "$verdict" "$how"
+  done | sort -t'|' -k1,1 -rn)
+
+  if [ "$JSON" -eq 1 ]; then
+    printf '{\n  "mode": "disk",\n'
+    printf '  "disk": {"used_gb": %s, "total_gb": %s, "pct": %s},\n' "$(gbint $usedk)" "$(gbint $blocks)" "$pct"
+    printf '  "items": [\n'
+    first=1
+    while IFS='|' read -r sizek label icon path verdict how; do
+      [ -n "$sizek" ] || continue
+      [ $first -eq 1 ] || printf ',\n'
+      first=0
+      printf '    {"label": "%s", "icon": "%s", "path": "%s", "size_mb": %s, "verdict": "%s", "how": "%s"}' \
+        "$(jesc "$label")" "$icon" "$(jesc "$path")" "$((sizek / 1024))" "$verdict" "$(jesc "$how")"
+    done < <(printf '%s\n' "$FOUND")
+    [ $first -eq 0 ] && printf '\n'
+    printf '  ]\n}\n'
+    exit 0
+  fi
+
+  echo
+  if [ "$pct" -ge 90 ]; then
+    echo "💾 ${BLD}Your disk: $(gbint $usedk) GB used of $(gbint $blocks) GB (${pct}% full).${NC} ${RED}That's tight.${NC}"
+  else
+    echo "💾 ${BLD}Your disk: $(gbint $usedk) GB used of $(gbint $blocks) GB (${pct}% full).${NC}"
+  fi
+  echo
+  if [ -z "$FOUND" ]; then
+    echo "${GRN}Nothing chunky in the usual junk spots.${NC} Whatever is using your disk,"
+    echo "it is your actual files — photos, videos, projects. No shortcuts there."
+  else
+    while IFS='|' read -r sizek label icon path verdict how; do
+      [ -n "$sizek" ] || continue
+      case "$verdict" in
+        safe)  v="${GRN}Safe to clear:${NC}" ;;
+        check) v="${YLW}Check first:${NC}" ;;
+        *)     v="${DIM}Your call:${NC}" ;;
+      esac
+      echo "  ${icon} ${BLD}${label}${NC} — ${BLD}$(gbone $sizek)${NC}. ${v} ${how}"
+    done < <(printf '%s\n' "$FOUND")
+    echo
+    echo "${DIM}machogs deletes nothing. It shows you where the weight is; you decide.${NC}"
+  fi
+  echo
   exit 0
 fi
 
