@@ -148,12 +148,13 @@ struct StoryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header.reveal(appeared, delay: 0)
+                    liveNow.reveal(appeared, delay: 0.04)
                     if story.events.isEmpty {
-                        emptyState.reveal(appeared, delay: 0.05)
+                        emptyState.reveal(appeared, delay: 0.08)
                     } else {
-                        heroRow.reveal(appeared, delay: 0.05)
-                        hallOfShame.reveal(appeared, delay: 0.1)
-                        activity.reveal(appeared, delay: 0.15)
+                        heroRow.reveal(appeared, delay: 0.08)
+                        hallOfShame.reveal(appeared, delay: 0.12)
+                        activity.reveal(appeared, delay: 0.16)
                         bragRow.reveal(appeared, delay: 0.2)
                     }
                     footer.reveal(appeared, delay: 0.25)
@@ -168,7 +169,131 @@ struct StoryView: View {
         .onAppear {
             story = Story.load()
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appeared = true }
+            // The window is a command center, not just a scoreboard: load the
+            // live picture (ports are instant; the disk scan takes ~15s).
+            if engine.portsReport == nil { engine.checkPorts() }
+            if engine.diskReport == nil { engine.checkDisk() }
         }
+        // Closing things bumps the log; keep the scoreboard in sync.
+        .onChange(of: engine.celebrate) { _ in story = Story.load() }
+    }
+
+    // MARK: - Right now: everything the popover can do, in the big window.
+
+    private var liveNow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Circle().fill(engine.clean && !engine.swapTrouble ? Color.green : Color.red)
+                    .frame(width: 8, height: 8)
+                Text("Right now")
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                Spacer()
+                if engine.refreshing || engine.portsLoading || engine.diskLoading {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    engine.refresh(); engine.checkPorts(); engine.checkDisk()
+                } label: {
+                    Text("Re-check")
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(Capsule().fill(Color.primary.opacity(0.07)))
+                }
+                .buttonStyle(Squish())
+            }
+
+            if engine.swapTrouble { SwapCard(engine: engine) }
+
+            if let receipt = engine.receipt {
+                Text(receipt)
+                    .font(.system(.callout, design: .rounded).weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12)
+                        .fill(LinearGradient(colors: [.green.opacity(0.9), .teal.opacity(0.9)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            }
+
+            if engine.groups.isEmpty {
+                HStack(spacing: 6) {
+                    Text("✨")
+                    Text("Nothing is hogging your Mac right now.")
+                        .font(.system(.callout, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+            } else {
+                if engine.groups.count > 1 {
+                    HStack {
+                        Text("\(engine.groups.reduce(0) { $0 + $1.count }) things worth closing")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        pill("Close everything 🧹", tint: .pink) { engine.closeAll() }
+                    }
+                }
+                ForEach(engine.groups) { group in
+                    HogCard(group: group) { engine.close(group) }
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 6)),
+                            removal: .scale(scale: 0.8).combined(with: .opacity)))
+                }
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                // Ports — instant answer to "who's on 3000?"
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("🔌 Ports")
+                        .font(.system(.callout, design: .rounded).weight(.bold))
+                    if let p = engine.portsReport {
+                        if p.ports.isEmpty {
+                            Text("Nothing is listening.")
+                                .font(.system(.caption, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(p.ports) { item in
+                            PortRow(item: item) { engine.freePort(item) }
+                                .transition(.asymmetric(
+                                    insertion: .opacity,
+                                    removal: .move(edge: .trailing).combined(with: .opacity)))
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Storage — safe caches clear right here.
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("💾 Storage")
+                        .font(.system(.callout, design: .rounded).weight(.bold))
+                    if let d = engine.diskReport {
+                        if d.items.isEmpty {
+                            Text("Junk spots are clean — the disk is your real files.")
+                                .font(.system(.caption, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(d.items) { item in
+                            DiskRow(item: item,
+                                    clearing: engine.clearingPath == item.path,
+                                    clear: { engine.clearDisk(item) })
+                                .transition(.asymmetric(
+                                    insertion: .opacity,
+                                    removal: .move(edge: .trailing).combined(with: .opacity)))
+                        }
+                    } else if engine.diskLoading {
+                        Text("Weighing the junk spots…")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
     }
 
     private var header: some View {

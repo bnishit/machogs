@@ -70,7 +70,7 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
@@ -79,6 +79,10 @@ for a in "$@"; do
     blame)       MODE=blame ;;
     brag)        MODE=brag ;;
     disk)        MODE=disk ;;
+    clear)       if [ "$MODE" = disk ] || [ "$MODE" = clear-pending ]; then MODE=clear-pending; else
+                   echo "clear goes with disk: machogs disk clear <path>" >&2; exit 2; fi ;;
+    /*|~*)       if [ "$MODE" = clear-pending ]; then CLEAR_PATH=$a; else
+                   echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
     [0-9]*)      if [ "$PORTS" -eq 1 ]; then PORT_NUM=$a; else
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
     --dupes)     DUPES=1 ;;
@@ -487,9 +491,11 @@ fi
 
 # ---- disk: where the storage went ------------------------------------------
 # The storage X-ray. Same promise as the CPU side: find it, explain it in
-# plain words, let the person decide. This mode DELETES NOTHING, ever — it
-# points at the weight and says which of it is safe to clear and how.
-if [ "$MODE" = disk ]; then
+# plain words, let the person decide. Reporting DELETES NOTHING, ever.
+# `machogs disk clear <path>` is the one deliberate exception: it clears the
+# CONTENTS of a directory, and only one this script itself listed as
+# verdict=safe (rebuildable caches, the Trash). Any other path is refused.
+if [ "$MODE" = disk ] || [ "$MODE" = clear-pending ]; then
   # On APFS the free space is shared across the container, so read the Data
   # volume: its "avail" is the real free space the person has left.
   set -- $(df -k /System/Volumes/Data 2>/dev/null | tail -1)
@@ -510,6 +516,35 @@ Docker's disk image|🐳|$HOME/Library/Containers/com.docker.docker/Data|check|D
 iOS Simulators|🛠️|$HOME/Library/Developer/CoreSimulator|check|'xcrun simctl delete unavailable' clears dead simulators.
 npm cache|📦|$HOME/.npm|safe|npm rebuilds it: npm cache clean --force
 Downloads|⬇️|$HOME/Downloads|yours|You know what is in there."
+
+  # `disk clear <path>` — the only deleting this script ever does. The path
+  # must be one of the suspects above, verdict=safe, verbatim. Contents go,
+  # the directory stays, and the freed size is measured, not guessed.
+  if [ "$MODE" = clear-pending ]; then
+    [ -n "$CLEAR_PATH" ] || { echo "Pick a path: machogs disk clear <path>" >&2; exit 2; }
+    ok=0
+    while IFS='|' read -r label icon path verdict how; do
+      [ "$path" = "$CLEAR_PATH" ] && [ "$verdict" = safe ] && { ok=1; safelabel=$label; break; }
+    done < <(printf '%s\n' "$SUSPECTS")
+    if [ "$ok" -ne 1 ]; then
+      echo "Refusing: $CLEAR_PATH is not on the safe-to-clear list." >&2
+      echo "Safe paths are rebuildable caches and the Trash — run: machogs disk" >&2
+      exit 3
+    fi
+    [ -e "$CLEAR_PATH" ] || { echo "Nothing there: $CLEAR_PATH" >&2; exit 3; }
+    before=$(du -sk "$CLEAR_PATH" 2>/dev/null | cut -f1)
+    find "$CLEAR_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+    after=$(du -sk "$CLEAR_PATH" 2>/dev/null | cut -f1)
+    freed_mb=$(( (${before:-0} - ${after:-0}) / 1024 )); [ "$freed_mb" -lt 0 ] && freed_mb=0
+    printf '%s\tcleared\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$safelabel" "$CLEAR_PATH" "$freed_mb" >> "$LOG"
+    if [ "$JSON" -eq 1 ]; then
+      printf '{"mode": "clear", "path": "%s", "label": "%s", "freed_mb": %s}\n' \
+        "$(jesc "$CLEAR_PATH")" "$(jesc "$safelabel")" "$freed_mb"
+    else
+      awk -v m="$freed_mb" 'BEGIN{ if (m>=1024) printf "🎉 Cleared %s — got back %.1f GB.\n", ARGV[1], m/1024; else printf "🎉 Cleared %s — got back %d MB.\n", ARGV[1], m }' "$safelabel"
+    fi
+    exit 0
+  fi
 
   FOUND=$(printf '%s\n' "$SUSPECTS" | while IFS='|' read -r label icon path verdict how; do
     [ -e "$path" ] || continue
@@ -700,11 +735,17 @@ if [ "$JSON" -eq 1 ] || [ "$HUMAN" -eq 1 ]; then exec 4>&1 1>/dev/null; fi
 
 KILLED=0; FOUND=0; KILLED_PIDS=""; FREED_CPU=0; FREED_CSEC=0
 declare -a KILL_LIST=()
+QUEUED_PIDS=""
 
 # queue <pid> <reason>
 queue() {
   local pid=$1 reason=$2
   alive "$pid" || return
+  # One pid, one finding. A process can match two sections (an orphaned MCP
+  # server that is also spinning); the first section to claim it wins, or the
+  # report shows the same process twice and fix/kill act on it twice.
+  case " $QUEUED_PIDS " in *" $pid "*) return ;; esac
+  QUEUED_PIDS="$QUEUED_PIDS $pid"
   if protected "$pid"; then
     printf "    %sskip%s %-7s %s ${DIM}(protected: own session / Claude Code)${NC}\n" "$DIM" "$NC" "$pid" "$reason"
     row "$pid" "$SECTION" "protected" "$(cpu_of $pid)" "$(etime_of $pid)" "$reason"

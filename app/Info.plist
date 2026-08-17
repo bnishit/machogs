@@ -2,24 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>
-	<string>Machogs</string>
 	<key>CFBundleDisplayName</key>
 	<string>Machogs</string>
+	<key>CFBundleExecutable</key>
+	<string>Machogs</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.bnishit.machogs</string>
-	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
-	<key>CFBundleExecutable</key>
+	<key>CFBundleName</key>
 	<string>Machogs</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
-	<key>LSUIElement</key>
-	<true/>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -31,6 +27,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT license — github.com/bnishit/machogs</string>
 </dict>

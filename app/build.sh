@@ -20,5 +20,13 @@ cp Info.plist "$APP/Contents/"
 cp ../machogs "$APP/Contents/Resources/machogs"
 chmod +x "$APP/Contents/Resources/machogs"
 
+# App icon: drawn in code (make-icon.swift) so there are no binary assets to
+# maintain — regenerate only when missing.
+if [ ! -f AppIcon.icns ]; then
+  swift make-icon.swift
+  iconutil -c icns AppIcon.iconset -o AppIcon.icns
+fi
+cp AppIcon.icns "$APP/Contents/Resources/"
+
 codesign --force --options runtime -s "$IDENTITY" "$APP"
 echo "Built $APP  (signed: $IDENTITY)"

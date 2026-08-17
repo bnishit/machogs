@@ -118,6 +118,13 @@ struct FindingGroup: Identifiable {
     let story: String
     let members: [Finding]
     var id: String { story }
+    // Stable identity across polls: the story text mutates as ages tick
+    // ("idle 49 minutes" → "50 minutes"), so anything that must recognize
+    // "the same hog as last poll" — the watchdog, close-by-key — uses this.
+    var key: String {
+        guard let m = members.first else { return story }
+        return "\(m.section)|\(m.what)|\(m.owner)"
+    }
     var count: Int { members.count }
     var hot: Bool { members.contains { $0.hot } }
     var totalCPU: Double { members.reduce(0) { $0 + $1.cpu } }
@@ -154,8 +161,12 @@ final class Engine: ObservableObject {
     @Published var diskLoading = false
     @Published var portsReport: PortsReport?
     @Published var portsLoading = false
+    @Published var clearingPath: String?   // disk item being cleared right now
     @Published var celebrate = 0   // bumping this fires the confetti cannon
+    @Published var bust: BustEvent?          // what the Caught-in-4K window shows
+    @Published var bustPending: BustEvent?   // caught, not yet seen: 📸 icon + popover banner
 
+    let watchdog = Watchdog()
     private var timer: Timer?
     private var started = false
 
@@ -174,6 +185,7 @@ final class Engine: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        watchdog.attach(self)
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -197,6 +209,7 @@ final class Engine: ObservableObject {
                             .map { FindingGroup(story: $0.key, members: $0.value) }
                             .sorted { $0.totalCPU > $1.totalCPU }
                     }
+                    self.watchdog.evaluate(report: report, groups: self.groups)
                 case .failure(let err):
                     self.errorText = err.message
                 }
@@ -270,6 +283,39 @@ final class Engine: ObservableObject {
         }
     }
 
+    // Clear one safe disk item. The engine re-checks the path against its own
+    // safe list and refuses anything else, so the app can't be talked into
+    // deleting something that matters.
+    func clearDisk(_ item: DiskItem) {
+        guard item.verdict == "safe", clearingPath == nil else { return }
+        clearingPath = item.path
+        struct ClearResult: Codable { let mode: String; let label: String; let freed_mb: Int }
+        Task.detached(priority: .userInitiated) {
+            let result = Self.runJSON(["disk", "clear", item.path, "--json"], as: ClearResult.self)
+            await MainActor.run {
+                self.clearingPath = nil
+                switch result {
+                case .success(let r):
+                    let text = r.freed_mb >= 1024
+                        ? String(format: "💾 Cleared %@ — got back %.1f GB.", item.label, Double(r.freed_mb) / 1024)
+                        : "💾 Cleared \(item.label) — got back \(r.freed_mb) MB."
+                    Sfx.win()
+                    self.celebrate += 1
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) { self.receipt = text }
+                    self.checkDisk()
+                case .failure(let e):
+                    self.errorText = e.message
+                }
+            }
+        }
+    }
+
+    // The one fix for exhausted swap. The UI double-confirms before this runs.
+    func restartMac() {
+        NSAppleScript(source: "tell application \"System Events\" to restart")?
+            .executeAndReturnError(nil)
+    }
+
     func freePort(_ item: PortItem) {
         guard item.killable else { return }
         if kill(pid_t(item.pid), SIGKILL) == 0 {
@@ -285,40 +331,17 @@ final class Engine: ObservableObject {
         }
     }
 
-    // Close one group. Only pids the engine marked closable ever reach here.
-    func close(_ group: FindingGroup) {
+    // One close path for everything — popover cards, "Close everything", the
+    // Caught-in-4K window, and the notification's Close button. Only pids the
+    // engine marked closable ever reach the kill(); returns the receipt text.
+    @discardableResult
+    func closeMatching(_ keys: Set<String>) -> String? {
+        let targets = groups.filter { keys.contains($0.key) }
+        guard !targets.isEmpty else { return nil }
         var closed = 0
         var freedCPU = 0.0
         var freedSecs = 0
-        for f in group.members where f.closable {
-            if kill(pid_t(f.pid), SIGKILL) == 0 {
-                closed += 1
-                freedCPU += f.cpu
-                freedSecs += f.cpu_seconds
-                Self.log(f)
-            }
-        }
-        guard closed > 0 else { return }
-        Sfx.pop()
-        celebrate += 1
-        var lines = ["🎉 Closed \(closed) program\(closed == 1 ? "" : "s")."]
-        let cores = freedCPU / 100
-        if cores >= 0.2 { lines.append("Got back \(String(format: "%.1f", cores)) of a CPU core.") }
-        let charges = freedSecs / 9000  // ~6W core, ~15Wh phone battery
-        if charges >= 2 { lines.append("⚡ The wasted power ≈ \(charges) phone charges.") }
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
-            receipt = lines.joined(separator: " ")
-            groups.removeAll { $0.id == group.id }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
-    }
-
-    // The whole list in one go: one kill sweep, one receipt, one confetti payoff.
-    func closeAll() {
-        var closed = 0
-        var freedCPU = 0.0
-        var freedSecs = 0
-        for g in groups {
+        for g in targets {
             for f in g.members where f.closable {
                 if kill(pid_t(f.pid), SIGKILL) == 0 {
                     closed += 1
@@ -328,19 +351,34 @@ final class Engine: ObservableObject {
                 }
             }
         }
-        guard closed > 0 else { return }
-        Sfx.pop()
-        celebrate += 1
-        var lines = ["🎉 Closed all \(closed) of them."]
+        guard closed > 0 else { return nil }
+        let sweptAll = targets.count == groups.count && closed > 1
+        var lines = [sweptAll ? "🎉 Closed all \(closed) of them."
+                              : "🎉 Closed \(closed) program\(closed == 1 ? "" : "s")."]
         let cores = freedCPU / 100
         if cores >= 0.2 { lines.append("Got back \(String(format: "%.1f", cores)) of a CPU core.") }
-        let charges = freedSecs / 9000
+        let charges = freedSecs / 9000  // ~6W core, ~15Wh phone battery
         if charges >= 2 { lines.append("⚡ The wasted power ≈ \(charges) phone charges.") }
+        let text = lines.joined(separator: " ")
+        Sfx.pop()
+        celebrate += 1
         withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
-            receipt = lines.joined(separator: " ")
-            groups.removeAll()
+            receipt = text
+            groups.removeAll { keys.contains($0.key) }
         }
+        pruneBustPending()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
+        return text
+    }
+
+    func close(_ group: FindingGroup) { closeMatching([group.key]) }
+    func closeAll() { closeMatching(Set(groups.map(\.key))) }
+
+    // A pending catch whose groups are all gone has resolved itself — stop
+    // showing 📸 for a mess that no longer exists.
+    func pruneBustPending() {
+        guard let bp = bustPending else { return }
+        if !groups.contains(where: { bp.keys.contains($0.key) }) { bustPending = nil }
     }
 
     // Run `machogs brag` and put the card on the clipboard, ready to paste.
@@ -409,20 +447,529 @@ struct HoverLift: ViewModifier {
     }
 }
 
-// The mascot idles with a slow breath; while scanning it gets excited.
+// Gradient action pill — the only kind of "do something" button in the app.
+// File-scope so the popover and the Caught-in-4K window share one look.
+func pill(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+        Text(title)
+            .font(.system(.caption, design: .rounded).weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(
+                Capsule().fill(LinearGradient(colors: [tint, tint.opacity(0.7)],
+                                              startPoint: .top, endPoint: .bottom))
+            )
+            .shadow(color: tint.opacity(0.45), radius: 4, y: 1)
+    }
+    .buttonStyle(Squish())
+}
+
+// Quiet secondary button.
+func ghost(_ title: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+        Text(title)
+            .font(.system(.caption, design: .rounded).weight(.semibold))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(Color.primary.opacity(0.07)))
+    }
+    .buttonStyle(Squish())
+}
+
+func chip(_ text: String, _ color: Color) -> some View {
+    // .secondary-on-.secondary is unreadably low-contrast; muted tags get
+    // primary-based ink instead.
+    let muted = color == .secondary
+    return Text(text)
+        .font(.system(.caption2, design: .rounded).weight(.semibold))
+        .foregroundStyle(muted ? Color.primary.opacity(0.65) : color)
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(Capsule().fill(muted ? Color.primary.opacity(0.08) : color.opacity(0.12)))
+}
+
+// One hog group as a card — story, heat tag, close pill. Shared by the
+// popover list and the Caught-in-4K window so a hog looks the same everywhere.
+struct HogCard: View {
+    let group: FindingGroup
+    let close: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // A glyph avatar per card, rhyming with the mascot: circle + glow.
+            Image(systemName: group.hot ? "flame.fill" : "moon.zzz.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(group.hot ? Color.orange : Color.pink)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill((group.hot ? Color.orange : Color.pink).opacity(0.15)))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(group.story)
+                    .font(.system(.callout, design: .rounded))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if group.hot {
+                        chip("🔥 \(String(format: "%.0f", group.totalCPU))% of a core", .orange)
+                    } else {
+                        chip("💤 idle, holding memory", .secondary)
+                    }
+                    Spacer()
+                    pill(group.count > 1 ? "Close all \(group.count) 💥" : "Close it 💥",
+                         tint: group.hot ? .orange : .pink,
+                         action: close)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    group.hot
+                    ? AnyShapeStyle(LinearGradient(colors: [.orange, .red.opacity(0.6)],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+                    : AnyShapeStyle(Color.primary.opacity(0.08)),
+                    lineWidth: 1)
+        )
+        .modifier(HoverLift())
+    }
+}
+
+// A two-step action: first tap arms it ("sure?"), second tap fires. Arms
+// disarm themselves after a beat so a stray click never commits anything.
+struct ArmedPill: View {
+    let idle: String
+    let armedTitle: String
+    let tint: Color
+    let fire: () -> Void
+    @State private var armed = false
+
+    var body: some View {
+        pill(armed ? armedTitle : idle, tint: armed ? .red : tint) {
+            if armed {
+                armed = false
+                fire()
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { armed = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { armed = false }
+                }
+            }
+        }
+    }
+}
+
+// The one problem closing programs cannot fix. Says why in plain words and
+// offers the actual fix, double-confirmed. Shared by popover and Receipts.
+struct SwapCard: View {
+    @ObservedObject var engine: Engine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("🌡️").font(.system(size: 20))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Out of fast memory.")
+                        .font(.system(.callout, design: .rounded).weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("\(engine.report?.host.uptime_days ?? 0) days since the last restart")
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+                ArmedPill(idle: "Restart now ⏻", armedTitle: "Sure? Everything closes ⏻",
+                          tint: .indigo) { engine.restartMac() }
+            }
+            Text("Your Mac's fast memory is full, so it is shuffling work to the much slower disk — a desk so buried you're working out of boxes on the floor. That's the slowness you feel, and closing apps barely helps. A restart clears the desk; nothing else does.")
+                .font(.system(.caption, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(LinearGradient(colors: [Color(red: 0.72, green: 0.48, blue: 0.10),
+                                              Color(red: 0.55, green: 0.38, blue: 0.12)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing)))
+        .shadow(color: Color(red: 0.72, green: 0.48, blue: 0.10).opacity(0.35), radius: 6, y: 2)
+    }
+}
+
+// One listening port as a row. Shared by the popover and the Receipts window.
+struct PortRow: View {
+    let item: PortItem
+    let free: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(":\(String(item.port))")
+                    .font(.system(.caption, design: .monospaced).weight(.bold))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(tint.opacity(0.16)))
+                    .foregroundStyle(tint)
+                Text(item.process)
+                    .font(.system(.callout, design: .rounded))
+                    .lineLimit(1)
+                Spacer()
+                if item.killable {
+                    pill("Free it ⚡", tint: .pink, action: free)
+                } else if item.protected {
+                    chip("your session", .green)
+                } else {
+                    chip("macOS", .secondary)
+                }
+            }
+            Text(subtitle)
+                .font(.system(.caption2, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .padding(.leading, 2)
+        }
+    }
+
+    private var tint: Color {
+        if item.protected { return .green }
+        if !item.killable { return .secondary }
+        return .cyan
+    }
+
+    private var subtitle: String {
+        if !item.note.isEmpty { return item.note }
+        var bits: [String] = []
+        if !item.owner.isEmpty { bits.append("started by \(item.owner)") }
+        if !item.cwd.isEmpty && item.cwd != "/" { bits.append("in \(item.cwd)") }
+        bits.append("running \(item.age)")
+        return bits.joined(separator: " · ")
+    }
+}
+
+// One junk spot as a row. Safe items get a real Clear button (armed, two-tap);
+// everything else keeps Show-in-Finder only — same promise as the CLI.
+struct DiskRow: View {
+    let item: DiskItem
+    let clearing: Bool
+    let clear: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(item.icon) \(item.label)")
+                    .font(.system(.callout, design: .rounded))
+                Spacer()
+                Text(item.sizeText)
+                    .font(.system(.callout, design: .monospaced).weight(.semibold))
+                if clearing {
+                    ProgressView().controlSize(.small)
+                } else if item.verdict == "safe" {
+                    ArmedPill(idle: "Clear it 🧨", armedTitle: "Really clear \(item.sizeText)? 💥",
+                              tint: .teal, fire: clear)
+                }
+                ghost("Show") {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
+                }
+            }
+            HStack(spacing: 4) {
+                Text(item.verdictText)
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundStyle(item.verdictColor)
+                Text(item.how)
+                    .font(.system(.caption2, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// The mascot is a drawn pig, not a font glyph, so it can act: it breathes,
+// blinks on its own clock, perks its ears and blushes when the cursor
+// arrives, and oinks with its snout when hovered or poked. When something is
+// cooking the CPU it carries a small flame and glows hotter.
 struct MascotPig: View {
     let hot: Bool
     let refreshing: Bool
     @State private var breathe = false
+    @State private var blink = false
+    @State private var hovering = false
+    @State private var oink = false
+
     var body: some View {
-        Text(hot ? "🔥" : "🐷")
-            .font(.system(size: 36))
-            .scaleEffect(breathe ? 1.07 : 0.96)
-            .rotationEffect(.degrees(breathe ? 4 : -4))
-            .animation(.easeInOut(duration: refreshing ? 0.3 : 1.8).repeatForever(autoreverses: true),
+        PigFace(blink: blink, hovering: hovering, oink: oink, hot: hot)
+            .frame(width: 42, height: 42)
+            .scaleEffect(x: breathe ? 1.015 : 0.985, y: breathe ? 0.985 : 1.015)
+            .rotationEffect(.degrees(breathe ? 1.4 : -1.4))
+            .animation(.spring(response: refreshing ? 0.34 : 1.8, dampingFraction: 0.82)
+                .repeatForever(autoreverses: true),
                        value: breathe)
-            .shadow(color: (hot ? Color.orange : Color.pink).opacity(0.5), radius: 10)
+            .shadow(color: (hot ? Color.orange : Color.pink).opacity(0.28), radius: 7, y: 2)
             .onAppear { breathe = true }
+            .task {
+                // Blink on a lazy, slightly irregular clock — alive, not metronomic.
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: UInt64.random(in: 2_000_000_000...5_000_000_000))
+                    withAnimation(.spring(response: 0.11, dampingFraction: 0.92)) { blink = true }
+                    try? await Task.sleep(nanoseconds: 115_000_000)
+                    withAnimation(.spring(response: 0.18, dampingFraction: 0.72)) { blink = false }
+                }
+            }
+            .onHover { h in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { hovering = h }
+                if h { doOink() }
+            }
+            .onTapGesture { doOink() }
+    }
+
+    private func doOink() {
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.35)) { oink = true }
+        Sfx.play("Pop")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.5)) { oink = false }
+        }
+    }
+}
+
+// Compact rounded-triangle ear, designed to tuck into the top of the head.
+private struct PigEarShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.width * 0.08, y: r.height * 0.92))
+        p.addCurve(to: CGPoint(x: r.width * 0.37, y: r.height * 0.08),
+                   control1: CGPoint(x: r.width * 0.10, y: r.height * 0.56),
+                   control2: CGPoint(x: r.width * 0.16, y: r.height * 0.13))
+        p.addCurve(to: CGPoint(x: r.width * 0.94, y: r.height * 0.88),
+                   control1: CGPoint(x: r.width * 0.59, y: -r.height * 0.02),
+                   control2: CGPoint(x: r.width * 0.91, y: r.height * 0.50))
+        p.addCurve(to: CGPoint(x: r.width * 0.08, y: r.height * 0.92),
+                   control1: CGPoint(x: r.width * 0.76, y: r.height),
+                   control2: CGPoint(x: r.width * 0.28, y: r.height))
+        return p
+    }
+}
+
+// Apple's pig has small, high-set almond eyes rather than cartoon circles.
+private struct PigEyeShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.midY))
+        p.addCurve(to: CGPoint(x: r.maxX, y: r.midY),
+                   control1: CGPoint(x: r.minX + r.width * 0.28, y: r.minY),
+                   control2: CGPoint(x: r.maxX - r.width * 0.28, y: r.minY))
+        p.addCurve(to: CGPoint(x: r.minX, y: r.midY),
+                   control1: CGPoint(x: r.maxX - r.width * 0.28, y: r.maxY),
+                   control2: CGPoint(x: r.minX + r.width * 0.28, y: r.maxY))
+        return p
+    }
+}
+
+private struct PigSmileShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.height * 0.18))
+        p.addCurve(to: CGPoint(x: r.maxX, y: r.height * 0.18),
+                   control1: CGPoint(x: r.width * 0.24, y: r.height * 0.92),
+                   control2: CGPoint(x: r.width * 0.76, y: r.height * 0.92))
+        return p
+    }
+}
+
+private struct PigFlameShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.midX, y: r.maxY))
+        p.addCurve(to: CGPoint(x: r.minX + r.width * 0.12, y: r.height * 0.58),
+                   control1: CGPoint(x: r.width * 0.22, y: r.maxY),
+                   control2: CGPoint(x: r.minX, y: r.height * 0.78))
+        p.addCurve(to: CGPoint(x: r.width * 0.46, y: r.minY),
+                   control1: CGPoint(x: r.width * 0.26, y: r.height * 0.38),
+                   control2: CGPoint(x: r.width * 0.42, y: r.height * 0.24))
+        p.addCurve(to: CGPoint(x: r.maxX - r.width * 0.08, y: r.height * 0.54),
+                   control1: CGPoint(x: r.width * 0.74, y: r.height * 0.20),
+                   control2: CGPoint(x: r.maxX, y: r.height * 0.34))
+        p.addCurve(to: CGPoint(x: r.midX, y: r.maxY),
+                   control1: CGPoint(x: r.maxX, y: r.height * 0.78),
+                   control2: CGPoint(x: r.width * 0.78, y: r.maxY))
+        return p
+    }
+}
+
+// Every measurement is proportional, so the same designed face stays crisp in
+// the 42pt header and at the larger size used by Receipts.
+struct PigFace: View {
+    let blink: Bool
+    let hovering: Bool
+    let oink: Bool
+    let hot: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let s = min(geo.size.width, geo.size.height)
+            ZStack {
+                ear(s: s)
+                    .rotationEffect(.degrees(hovering ? -3 : -12), anchor: .bottomTrailing)
+                    .offset(x: -s * 0.205, y: -s * 0.305)
+                ear(s: s)
+                    .scaleEffect(x: -1)
+                    .rotationEffect(.degrees(hovering ? 3 : 12), anchor: .bottomLeading)
+                    .offset(x: s * 0.205, y: -s * 0.305)
+
+                Ellipse()
+                    .fill(LinearGradient(
+                        colors: [Color(red: 0.969, green: 0.780, blue: 0.745),
+                                 Color(red: 0.937, green: 0.659, blue: 0.627)],
+                        startPoint: .top, endPoint: .bottom))
+                    .frame(width: s * 0.92, height: s * 0.84)
+                    .overlay(
+                        Ellipse()
+                            .fill(LinearGradient(colors: [.clear,
+                                                          Color(red: 0.68, green: 0.30, blue: 0.28).opacity(0.16)],
+                                                 startPoint: .center, endPoint: .bottom))
+                            .frame(width: s * 0.92, height: s * 0.84)
+                    )
+                    .overlay(
+                        Ellipse()
+                            .fill(RadialGradient(colors: [Color(red: 1.0, green: 0.96, blue: 0.87).opacity(0.55),
+                                                          .white.opacity(0)],
+                                                 center: UnitPoint(x: 0.38, y: 0.12),
+                                                 startRadius: 0, endRadius: s * 0.37))
+                            .frame(width: s * 0.78, height: s * 0.56)
+                            .offset(x: -s * 0.045, y: -s * 0.095)
+                    )
+                    .shadow(color: Color(red: 0.46, green: 0.20, blue: 0.18).opacity(0.20),
+                            radius: s * 0.05, y: s * 0.038)
+                    .offset(y: s * 0.06)
+
+                Group {
+                    blush(s: s).offset(x: -s * 0.315, y: s * 0.115)
+                    blush(s: s).offset(x: s * 0.315, y: s * 0.115)
+                }
+                .opacity(hovering ? 0.78 : 0)
+                .scaleEffect(hovering ? 1 : 0.2)
+
+                Group {
+                    eye(s: s).offset(x: -s * 0.125, y: -s * 0.035)
+                    eye(s: s).offset(x: s * 0.125, y: -s * 0.035)
+                }
+
+                PigSmileShape()
+                    .stroke(Color(red: 0.48, green: 0.20, blue: 0.19).opacity(0.60),
+                            style: StrokeStyle(lineWidth: max(0.7, s * 0.018), lineCap: .round))
+                    .frame(width: s * 0.18, height: s * 0.075)
+                    .offset(y: s * 0.355)
+
+                // This soft shadow is the contact point that makes the snout
+                // read as a raised muzzle rather than a sticker.
+                Capsule()
+                    .fill(Color(red: 0.45, green: 0.18, blue: 0.19).opacity(0.17))
+                    .frame(width: s * 0.44, height: s * 0.27)
+                    .blur(radius: s * 0.035)
+                    .offset(y: s * 0.225)
+                    .scaleEffect(oink ? 1.25 : (hovering ? 1.06 : 1))
+
+                snout(s: s)
+                    .offset(y: s * 0.19)
+                    .scaleEffect(oink ? 1.27 : (hovering ? 1.055 : 1))
+
+                if hot {
+                    flameBadge(s: s)
+                        .offset(x: s * 0.34, y: -s * 0.31)
+                        .transition(.scale(scale: 0.2).combined(with: .opacity))
+                }
+            }
+            .frame(width: s, height: s)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .animation(.spring(response: 0.30, dampingFraction: 0.64), value: hovering)
+            .animation(.spring(response: 0.22, dampingFraction: 0.48), value: oink)
+            .animation(.spring(response: 0.36, dampingFraction: 0.78), value: hot)
+            .compositingGroup()
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+
+    private func ear(s: CGFloat) -> some View {
+        ZStack {
+            PigEarShape()
+                .fill(LinearGradient(colors: [Color(red: 0.97, green: 0.75, blue: 0.72),
+                                               Color(red: 0.88, green: 0.51, blue: 0.51)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            PigEarShape()
+                .fill(Color(red: 0.70, green: 0.29, blue: 0.34).opacity(0.62))
+                .scaleEffect(x: 0.54, y: 0.59, anchor: UnitPoint.bottom)
+                .offset(y: s * 0.012)
+        }
+        .frame(width: s * 0.25, height: s * 0.30)
+        .shadow(color: Color.black.opacity(0.12), radius: s * 0.022, y: s * 0.015)
+    }
+
+    private func eye(s: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            PigEyeShape()
+                .fill(LinearGradient(colors: [Color(red: 0.31, green: 0.16, blue: 0.13),
+                                               Color(red: 0.12, green: 0.055, blue: 0.045)],
+                                     startPoint: .top, endPoint: .bottom))
+            Circle()
+                .fill(Color.white.opacity(0.92))
+                .frame(width: s * 0.024, height: s * 0.024)
+                .offset(x: s * 0.016, y: s * 0.014)
+        }
+        .frame(width: s * (hovering ? 0.098 : 0.092),
+               height: s * (hovering ? 0.155 : 0.145))
+        .scaleEffect(y: blink ? 0.08 : 1, anchor: .center)
+    }
+
+    private func blush(s: CGFloat) -> some View {
+        Ellipse()
+            .fill(RadialGradient(colors: [Color(red: 0.88, green: 0.32, blue: 0.38).opacity(0.58),
+                                          Color(red: 0.88, green: 0.32, blue: 0.38).opacity(0)],
+                                 center: .center, startRadius: 0, endRadius: s * 0.10))
+            .frame(width: s * 0.20, height: s * 0.115)
+    }
+
+    private func snout(s: CGFloat) -> some View {
+        ZStack {
+            Capsule()
+                .fill(LinearGradient(colors: [Color(red: 0.99, green: 0.72, blue: 0.72),
+                                               Color(red: 0.91, green: 0.49, blue: 0.53)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(
+                    Capsule()
+                        .stroke(LinearGradient(colors: [Color(red: 1.0, green: 0.94, blue: 0.87).opacity(0.70),
+                                                        .white.opacity(0.04)],
+                                               startPoint: .top, endPoint: .bottom),
+                                lineWidth: max(0.6, s * 0.016))
+                )
+                .shadow(color: Color(red: 0.50, green: 0.16, blue: 0.18).opacity(0.22),
+                        radius: s * 0.025, y: s * 0.018)
+            HStack(spacing: s * 0.115) {
+                nostril(s: s)
+                nostril(s: s)
+            }
+        }
+        .frame(width: s * 0.44, height: s * 0.27)
+    }
+
+    private func nostril(s: CGFloat) -> some View {
+        Ellipse()
+            .fill(LinearGradient(colors: [Color(red: 0.38, green: 0.15, blue: 0.16),
+                                          Color(red: 0.56, green: 0.22, blue: 0.24)],
+                                 startPoint: .top, endPoint: .bottom))
+            .frame(width: s * 0.068, height: s * 0.112)
+            .overlay(Ellipse().stroke(Color.white.opacity(0.10), lineWidth: s * 0.008))
+    }
+
+    private func flameBadge(s: CGFloat) -> some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(colors: [Color.white, Color(red: 1.0, green: 0.82, blue: 0.67)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .shadow(color: Color.orange.opacity(0.42), radius: s * 0.045, y: s * 0.018)
+            PigFlameShape()
+                .fill(LinearGradient(colors: [.yellow, .orange, .red],
+                                     startPoint: .bottom, endPoint: .top))
+                .padding(s * 0.055)
+        }
+        .frame(width: s * 0.29, height: s * 0.29)
     }
 }
 
@@ -507,6 +1054,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @AppStorage("soundOn") private var soundOn = true
+    @AppStorage("watchdogOn") private var watchdogOn = true
     @State private var appeared = false
 
     var body: some View {
@@ -517,9 +1065,22 @@ struct ContentView: View {
                 if let err = engine.errorText {
                     banner(err, colors: [.red.opacity(0.9), .red])
                 }
+                // The watchdog caught something while the popover was closed.
+                if let bp = engine.bustPending {
+                    Button {
+                        engine.bust = bp
+                        engine.bustPending = nil
+                        openWindow(id: "bust")
+                        NSApp.activate(ignoringOtherApps: true)
+                    } label: {
+                        banner("📸 \(bp.headline) — tap to see the catch.",
+                               colors: [.orange, .pink])
+                    }
+                    .buttonStyle(Squish())
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                }
                 if engine.swapTrouble {
-                    banner("🌡️ Your Mac is out of fast memory after \(engine.report?.host.uptime_days ?? 0) days on. Closing programs won't fix that part — restart when you can.",
-                           colors: [Color(red: 0.72, green: 0.48, blue: 0.10), Color(red: 0.55, green: 0.38, blue: 0.12)])
+                    SwapCard(engine: engine)
                 }
                 if let receipt = engine.receipt {
                     banner(receipt, colors: [.green, .teal])
@@ -542,6 +1103,9 @@ struct ContentView: View {
         .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
         .onAppear {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appeared = true }
+            // Ports answer in well under a second — load them so opening the
+            // popover already shows who is squatting what.
+            if engine.portsReport == nil { engine.checkPorts() }
         }
     }
 
@@ -642,56 +1206,13 @@ struct ContentView: View {
                     .padding(.horizontal, 2)
                 }
                 ForEach(engine.groups) { group in
-                    card(group)
+                    HogCard(group: group) { engine.close(group) }
                         .transition(.asymmetric(
                             insertion: .opacity.combined(with: .offset(y: 6)),
                             removal: .scale(scale: 0.8).combined(with: .opacity)))
                 }
             }
         }
-    }
-
-    private func card(_ group: FindingGroup) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            // A glyph avatar per card, rhyming with the mascot: circle + glow.
-            Image(systemName: group.hot ? "flame.fill" : "moon.zzz.fill")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(group.hot ? Color.orange : Color.pink)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill((group.hot ? Color.orange : Color.pink).opacity(0.15)))
-            VStack(alignment: .leading, spacing: 8) {
-                Text(group.story)
-                    .font(.system(.callout, design: .rounded))
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    if group.hot {
-                        tag("🔥 \(String(format: "%.0f", group.totalCPU))% of a core", .orange)
-                    } else {
-                        tag("💤 idle, holding memory", .secondary)
-                    }
-                    Spacer()
-                    pill(group.count > 1 ? "Close all \(group.count) 💥" : "Close it 💥",
-                         tint: group.hot ? .orange : .pink) {
-                        engine.close(group)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.primary.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(
-                    group.hot
-                    ? AnyShapeStyle(LinearGradient(colors: [.orange, .red.opacity(0.6)],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing))
-                    : AnyShapeStyle(Color.primary.opacity(0.08)),
-                    lineWidth: 1)
-        )
-        .modifier(HoverLift())
     }
 
     // MARK: ports
@@ -716,66 +1237,30 @@ struct ContentView: View {
                             .foregroundStyle(.green)
                     }
                 }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(p.ports) { item in
-                            portRow(item)
-                                .transition(.asymmetric(
-                                    insertion: .opacity,
-                                    removal: .move(edge: .trailing).combined(with: .opacity)))
-                        }
-                    }
-                    .padding(.trailing, 2)
+                // A plain bounded list, killable ports first. (A ScrollView
+                // collapses to zero height in this self-sizing popover.)
+                let ranked = p.ports.sorted {
+                    ($0.killable ? 0 : $0.protected ? 1 : 2, $0.port)
+                        < ($1.killable ? 0 : $1.protected ? 1 : 2, $1.port)
                 }
-                .frame(maxHeight: 210)
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(ranked.prefix(7)) { item in
+                        PortRow(item: item) { engine.freePort(item) }
+                            .transition(.asymmetric(
+                                insertion: .opacity,
+                                removal: .move(edge: .trailing).combined(with: .opacity)))
+                    }
+                }
+                if p.ports.count > 7 {
+                    Text("+ \(p.ports.count - 7) more — the Receipts window 📜 lists them all")
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                }
             } else if !engine.portsLoading {
                 Text("\"Port already in use\"? Find out who is squatting it.")
                     .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func portRow(_ item: PortItem) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(":\(String(item.port))")
-                    .font(.system(.caption, design: .monospaced).weight(.bold))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(portTint(item).opacity(0.16)))
-                    .foregroundStyle(portTint(item))
-                Text(item.process)
-                    .font(.system(.callout, design: .rounded))
-                    .lineLimit(1)
-                Spacer()
-                if item.killable {
-                    pill("Free it ⚡", tint: .pink) { engine.freePort(item) }
-                } else if item.protected {
-                    tag("your session", .green)
-                } else {
-                    tag("macOS", .secondary)
-                }
-            }
-            Text(subtitle(for: item))
-                .font(.system(.caption2, design: .rounded))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .padding(.leading, 2)
-        }
-    }
-
-    private func portTint(_ item: PortItem) -> Color {
-        if item.protected { return .green }
-        if !item.killable { return .secondary }
-        return .cyan
-    }
-
-    private func subtitle(for item: PortItem) -> String {
-        if !item.note.isEmpty { return item.note }
-        var bits: [String] = []
-        if !item.owner.isEmpty { bits.append("started by \(item.owner)") }
-        if !item.cwd.isEmpty && item.cwd != "/" { bits.append("in \(item.cwd)") }
-        bits.append("running \(item.age)")
-        return bits.joined(separator: " · ")
     }
 
     // MARK: storage
@@ -807,38 +1292,19 @@ struct ContentView: View {
                     }
                 }
                 ForEach(d.items) { item in
-                    diskRow(item)
+                    DiskRow(item: item,
+                            clearing: engine.clearingPath == item.path,
+                            clear: { engine.clearDisk(item) })
+                        .transition(.asymmetric(
+                            insertion: .opacity,
+                            removal: .move(edge: .trailing).combined(with: .opacity)))
                 }
-                Text("Nothing is deleted. It points; you decide.")
+                Text("Rebuildable caches get a Clear button. Everything else: it points; you decide.")
                     .font(.system(.caption2, design: .rounded)).foregroundStyle(.tertiary)
             } else if !engine.diskLoading {
                 Text("Where did your storage go? Takes ~15 seconds.")
                     .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private func diskRow(_ item: DiskItem) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text("\(item.icon) \(item.label)")
-                    .font(.system(.callout, design: .rounded))
-                Spacer()
-                Text(item.sizeText)
-                    .font(.system(.callout, design: .monospaced).weight(.semibold))
-                ghost("Show") {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-                }
-            }
-            HStack(spacing: 4) {
-                Text(item.verdictText)
-                    .font(.system(.caption2, design: .rounded).weight(.bold))
-                    .foregroundStyle(item.verdictColor)
-                Text(item.how)
-                    .font(.system(.caption2, design: .rounded))
-                    .foregroundStyle(.secondary)
-            }
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -866,44 +1332,6 @@ struct ContentView: View {
                 .background(Circle().fill(tint.opacity(0.14)))
             Text(title).font(.system(.subheadline, design: .rounded).weight(.bold))
         }
-    }
-
-    // Gradient action pill — the only kind of "do something" button in the app.
-    private func pill(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(.caption, design: .rounded).weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(
-                    Capsule().fill(LinearGradient(colors: [tint, tint.opacity(0.7)],
-                                                  startPoint: .top, endPoint: .bottom))
-                )
-                .shadow(color: tint.opacity(0.45), radius: 4, y: 1)
-        }
-        .buttonStyle(Squish())
-    }
-
-    // Quiet secondary button.
-    private func ghost(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(.caption, design: .rounded).weight(.semibold))
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(Capsule().fill(Color.primary.opacity(0.07)))
-        }
-        .buttonStyle(Squish())
-    }
-
-    private func tag(_ text: String, _ color: Color) -> some View {
-        // .secondary-on-.secondary is unreadably low-contrast; muted tags get
-        // primary-based ink instead.
-        let muted = color == .secondary
-        return Text(text)
-            .font(.system(.caption2, design: .rounded).weight(.semibold))
-            .foregroundStyle(muted ? Color.primary.opacity(0.65) : color)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(Capsule().fill(muted ? Color.primary.opacity(0.08) : color.opacity(0.12)))
     }
 
     private func banner(_ text: String, colors: [Color]) -> some View {
@@ -945,6 +1373,19 @@ struct ContentView: View {
             }
             .buttonStyle(Squish())
             .help(soundOn ? "Sounds on" : "Sounds off")
+            Button {
+                watchdogOn.toggle()
+                if watchdogOn { Sfx.pop() }
+            } label: {
+                Image(systemName: watchdogOn ? "bell.fill" : "bell.slash.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+            }
+            .buttonStyle(Squish())
+            .help(watchdogOn
+                  ? "Shoulder taps on — a ping when something starts cooking your CPU or an AI session leaves a mess"
+                  : "Shoulder taps off — machogs stays quiet until you open it")
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }
                 .buttonStyle(Squish())
@@ -972,9 +1413,10 @@ struct MachogsApp: App {
         MenuBarExtra {
             ContentView(engine: engine)
         } label: {
-            // The whole app in one glyph: pig = fine, fire = something's cooking.
+            // The whole app in one glyph: pig = fine, fire = something's
+            // cooking, camera = the watchdog caught something you haven't seen.
             // The label is on screen from launch, so it also boots the engine.
-            Text(engine.hot ? "🔥" : "🐷")
+            Text(engine.bustPending != nil ? "📸" : engine.hot ? "🔥" : "🐷")
                 .onAppear { engine.start() }
         }
         .menuBarExtraStyle(.window)
@@ -988,5 +1430,15 @@ struct MachogsApp: App {
         .defaultSize(width: 660, height: 640)
         .windowStyle(.hiddenTitleBar)
         .handlesExternalEvents(matching: ["receipts"])
+
+        // `machogs://bust` lands here — the reveal for a watchdog catch, opened
+        // by the notification click or the popover banner.
+        Window("Caught in 4K", id: "bust") {
+            BustView(engine: engine)
+                .onAppear { NSApp.activate(ignoringOtherApps: true) }
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: ["bust"])
     }
 }
