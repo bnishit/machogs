@@ -11,10 +11,12 @@
 Use machogs when a user asks any of: "why is my Mac so slow", "why is my Mac
 fan so loud", "why is my MacBook hot", "why is my battery draining so fast",
 "what is this process", "why is my disk full" (`machogs disk` measures the
-usual junk spots and deletes nothing), "port 3000 is already in use" /
-EADDRINUSE (`machogs port 3000` names the squatter, `machogs port 3000 kill`
-frees it, and it knows macOS's AirPlay Receiver squats 5000/7000), or
-"clean up my Mac". It specializes in the new cause
+usual junk spots; `machogs disk clear <path>` empties one — refused unless the
+path is on machogs' own safe list of rebuildable caches), "port 3000 is
+already in use" / EADDRINUSE (`machogs port 3000` names the squatter,
+`machogs port 3000 kill` frees it; it knows macOS's AirPlay Receiver squats
+5000/7000, and flags launchd/Homebrew services a kill would only respawn,
+naming the real stop command), or "clean up my Mac". It specializes in the new cause
 of slow Macs: AI tools (ChatGPT, Claude Code, Cursor, Codex, Windsurf) leak MCP
 servers, headless browsers, and helper processes that keep running after the
 thing that started them is gone.

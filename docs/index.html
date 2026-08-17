@@ -44,9 +44,11 @@
     {"@type": "Question", "name": "Why is my Mac suddenly slow?",
      "acceptedAnswer": {"@type": "Answer", "text": "Two causes: either something is eating the CPU (machogs finds and fixes this), or your Mac has run out of fast memory and is shuffling memory to disk — in which case closing programs barely helps and a restart is the only real fix. machogs checks both and tells you which one you have."}},
     {"@type": "Question", "name": "Why is my Mac storage full?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Usually dead weight in predictable places: app caches, Docker's disk image, old iPhone backups, Xcode build junk, npm caches, the Trash, and Downloads. machogs disk measures the usual junk spots, tells you in plain English which are safe to clear and how, and deletes nothing itself — you decide."}},
+     "acceptedAnswer": {"@type": "Answer", "text": "Usually dead weight in predictable places: app caches, Docker's disk image, old iPhone backups, Xcode build junk, npm caches, the Trash, and Downloads. machogs disk measures the usual junk spots and tells you in plain English which are safe to clear. When you decide, machogs disk clear empties a safe cache and reports how much came back — it refuses any path not on its own list of rebuildable caches, so documents and photos are untouchable by construction."}},
     {"@type": "Question", "name": "Port 3000 is already in use — what is using it and how do I free it?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Run machogs port 3000 to see exactly who holds the port, which project folder it was started in, and how long it has been running. Add kill to free it. machogs ports lists every listening port. It also explains the famous squatters: macOS's AirPlay Receiver holds ports 5000 and 7000 — killing it does not stick, so machogs points you at the System Settings toggle instead."}}
+     "acceptedAnswer": {"@type": "Answer", "text": "Run machogs port 3000 to see exactly who holds the port, which project folder it was started in, and how long it has been running. Add kill to free it. machogs ports lists every listening port. It also explains the famous squatters: macOS's AirPlay Receiver holds ports 5000 and 7000 — killing it does not stick, so machogs points you at the System Settings toggle instead. Background services that launchd would respawn (Homebrew databases, device agents) are flagged too, with the command that actually stops them."}},
+    {"@type": "Question", "name": "Can my Mac warn me when something starts eating the CPU?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Yes — Machogs.app watches every minute. When something has been burning a CPU core for two checks in a row, when an AI coding session ends leaving helpers running, or when one app piles up clones of the same helper, a Dynamic-Island-style pill slides out from under the notch with a one-line plain-English verdict and a Close it button. One tap per problem with a cooldown, a silent Notification Center backup, and a bell toggle to turn it off."}}
   ]
 }
 </script>
@@ -220,6 +222,21 @@ p b{color:var(--amber);font-weight:600}
 .safety li{margin:10px 0 10px 4px;list-style:none;max-width:64ch}
 .safety li::before{content:"✓ ";color:var(--green);font-weight:600}
 
+/* the island — the watchdog's live pill, drawn to scale */
+.island{
+  display:flex;align-items:center;gap:12px;max-width:480px;
+  background:#000;border:1px solid rgba(255,255,255,.14);border-radius:28px;
+  padding:12px 12px 12px 18px;margin:24px 0 10px;
+  box-shadow:0 18px 50px rgba(0,0,0,.6);
+}
+.island .txt{flex:1;min-width:0;line-height:1.35}
+.island .h{color:#fff;font-weight:600;font-size:14.5px}
+.island .s{color:rgba(255,255,255,.65);font-size:12.5px}
+.island .btn{
+  background:linear-gradient(#ffb454,#ff9db0);color:#1a1008;font-weight:700;
+  font-size:12.5px;border-radius:999px;padding:7px 14px;white-space:nowrap;
+}
+
 /* footer */
 footer{
   margin:90px 0 50px;padding-top:26px;border-top:1px solid var(--line);
@@ -307,9 +324,34 @@ Caught in 4K.</p>
     <div class="stat"><span class="n">🧠</span><span class="t"><b>Memory squatters.</b> Idle leftovers sitting on RAM they'll never use again.</span></div>
     <div class="stat"><span class="n">🌡️</span><span class="t"><b>The real diagnosis.</b> If your Mac is actually out of fast memory, it says so straight: restart, nothing else fixes it.</span></div>
   </div>
-  <p class="dim">What it will NOT do: delete your files. Ever. Even <b>machogs disk</b>,
-  the storage X-ray, only maps where your disk space went — Docker images, old iPhone
-  backups, caches — and says what is safe to clear. The deleting stays in your hands.</p>
+  <p class="dim">What it will NOT do: touch your files behind your back. The one deleting it
+  can do is <b>machogs disk clear</b> — and the engine refuses any path that is not on its
+  own short list of rebuildable caches (npm cache, Xcode build junk, app caches, the Trash).
+  Your documents, photos, and projects are untouchable, by construction.</p>
+</section>
+
+<section id="app">
+  <h2>The pig lives in your menu bar <span class="tick">and taps your shoulder</span></h2>
+  <p><b>Machogs.app</b> is the same engine, watching. Every minute it checks, quietly. The
+  moment something has been cooking a CPU core for two checks straight, a Claude Code
+  session ends and leaves its helpers running, or one app clones the same helper past
+  reason — this slides out from under your notch:</p>
+  <div class="island" aria-label="the machogs island, as it appears under the notch">
+    <span style="font-size:20px">🔥</span>
+    <span class="txt"><span class="h">Caught the hog</span><br>
+    <span class="s">This is why your fan is loud and your battery is draining.</span></span>
+    <span class="btn">Close it 💥</span>
+  </div>
+  <p class="tiny">One line, one button, gone in eight seconds. Hover and it waits. Click the
+  pill for the full "Caught in 4K" reveal. Cooldowns per problem, so it never nags; a bell
+  toggle turns shoulder-taps off; a silent copy lands in Notification Center so a missed
+  catch survives.</p>
+  <p>Behind the pill is a real app: <b>Now</b> — the one-line verdict plus everything worth
+  closing; <b>Ports</b> — every listening port, grouped by what you may do about it;
+  <b>Storage</b> — the disk gauge with safe caches clearable in two taps; and
+  <b>The Receipts</b> — the running scoreboard of which app wastes the most on
+  <em>your</em> machine. The app lives in the repo (<b>app/build.sh</b> builds it);
+  a signed, notarized download is on the way.</p>
 </section>
 
 <section class="faq">
@@ -344,14 +386,26 @@ Caught in 4K.</p>
   <p>Usually dead weight in predictable places: app caches, <b>Docker's disk image</b>,
   old iPhone backups, Xcode build junk, npm caches, the Trash, Downloads.
   <b>machogs disk</b> is the storage X-ray — it measures the usual junk spots and tells
-  you which are safe to clear and how. It deletes nothing itself. It points; you decide.</p>
+  you which are safe to clear and how. It points; you decide. And when you decide,
+  <b>machogs disk clear ~/.npm</b> (or two taps on Clear in the app) empties a safe cache
+  and reports exactly how much came back — refusing any path that is not on its own
+  safe list.</p>
 
   <h3>"Port 3000 is already in use" — by what??</h3>
   <p>The error every dev knows, and it never says who. <b>machogs port 3000</b> tells you
   exactly who is squatting it, in which project folder, for how long — and
   <b>machogs port 3000 kill</b> frees it. It also knows the famous one: macOS's own
   <b>AirPlay Receiver</b> sits on ports 5000 and 7000, killing it doesn't stick, and
-  machogs points you at the setting that actually turns it off.</p>
+  machogs points you at the setting that actually turns it off. Same honesty for
+  background services — a Homebrew database, a device agent — where a kill would just
+  respawn in a second: machogs says so and hands you the command that actually stops it.</p>
+
+  <h3>Can my Mac warn me when something starts eating the CPU?</h3>
+  <p>Now, yes. Machogs.app watches every minute, and the moment something has been cooking
+  a core for two checks in a row — or an AI coding session ends and leaves helpers running,
+  or one app clones the same helper past reason — a small black pill slides out from under
+  the notch with a one-line verdict and a <b>Close it</b> button. Once per problem, with a
+  cooldown, and a bell toggle if you'd rather it never speaks.</p>
 </section>
 
 <section>
