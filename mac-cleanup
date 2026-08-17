@@ -5,6 +5,15 @@
 #   mac-cleanup kill            kill the SAFE categories (orphans, leaks, zombies)
 #   mac-cleanup kill --dupes    also kill duplicate MCP servers (keeps newest per app)
 #   mac-cleanup --sessions      report idle Claude Code sessions too
+#   mac-cleanup --json          machine-readable output, for agents (see below)
+#
+# FOR AGENTS: `--json` prints one JSON object on stdout and nothing else, so it
+# can be parsed without scraping colours or column layout. Exit codes carry the
+# verdict, so a wrapper does not have to parse anything at all:
+#   0  clean — nothing worth reaping (or: kill finished)
+#  10  findings exist, report mode — a human should look
+#   2  bad arguments
+# --json is a reporting flag. It never kills on its own; pair it with `kill`.
 #
 # SAFETY RULES, in order of importance:
 #   1. Never kills anything in this script's own process ancestry.
@@ -42,17 +51,32 @@ RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'
 DIM=$'\033[2m'; BLD=$'\033[1m'; NC=$'\033[0m'
 [ -t 1 ] || { RED=; GRN=; YLW=; BLU=; DIM=; BLD=; NC=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
     --dupes)     DUPES=1 ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
-    -h|--help)   sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --json)      JSON=1 ;;
+    -h|--help)   sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
+
+# Findings are always recorded to a scratch file, whether or not --json was
+# asked for; it costs nothing and keeps the reporting code in one place.
+ROWS=$(mktemp -t mac-cleanup-rows) || exit 1
+trap 'rm -f "$ROWS"' EXIT
+
+# row <pid> <category> <action> <cpu> <age> <detail>
+# Tab-separated. Nothing here may contain a tab or newline; the fields are all
+# pids, numbers, and process names, so that holds.
+row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$ROWS"; }
+
+# Minimal JSON string escaping: backslash and double quote only. No control
+# characters can reach here — every value is a pid, number, or process name.
+jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 # ---- helpers --------------------------------------------------------------
 ppid_of()  { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
@@ -131,7 +155,13 @@ if [ "$MODE" = check ]; then
   exit 0
 fi
 
-KILLED=0; FOUND=0
+# --check is a human audit and prints its own report, so the JSON redirect goes
+# in below it. In --json mode the human report still runs — it is simply sent
+# to /dev/null, so the two output paths can never drift apart. Real stdout is
+# parked on fd 4 and restored at the end to print the JSON.
+if [ "$JSON" -eq 1 ]; then exec 4>&1 1>/dev/null; fi
+
+KILLED=0; FOUND=0; KILLED_PIDS=""
 declare -a KILL_LIST=()
 
 # queue <pid> <reason>
@@ -140,11 +170,13 @@ queue() {
   alive "$pid" || return
   if protected "$pid"; then
     printf "    %sskip%s %-7s %s ${DIM}(protected: own session / Claude Code)${NC}\n" "$DIM" "$NC" "$pid" "$reason"
+    row "$pid" "$SECTION" "protected" "$(cpu_of $pid)" "$(etime_of $pid)" "$reason"
     return
   fi
   FOUND=$((FOUND+1))
   KILL_LIST+=("$pid|$reason")
   printf "    %s%-7s%s cpu=%-5s age=%-12s %s\n" "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$reason"
+  row "$pid" "$SECTION" "reapable" "$(cpu_of $pid)" "$(etime_of $pid)" "$reason"
 }
 
 flush_kills() {
@@ -158,6 +190,7 @@ flush_kills() {
     alive "$pid" || continue
     if kill -9 "$pid" 2>/dev/null; then
       KILLED=$((KILLED+1))
+      KILLED_PIDS="$KILLED_PIDS $pid"
       echo "$(date '+%F %T') killed $pid — $reason" >> "$LOG"
       echo "    ${RED}killed${NC} $pid ${DIM}($reason)${NC}"
     fi
@@ -165,7 +198,14 @@ flush_kills() {
   KILL_LIST=()
 }
 
-hdr() { echo; echo "${BLU}${BLD}$1${NC}"; }
+# Printing a section header is also what sets the section id used by row(), so
+# the two can never disagree about which bucket a finding landed in. "1b. Stuck
+# spinners ..." -> SECTION=1b.
+SECTION="0"
+hdr() {
+  SECTION=$(printf '%s' "$1" | sed 's/\..*//')
+  echo; echo "${BLU}${BLD}$1${NC}"
+}
 
 # ---- 0. system health -----------------------------------------------------
 cores=$(sysctl -n hw.ncpu)
@@ -290,6 +330,8 @@ while IFS=$'\t' read -r gp sig; do
     else
       printf "    %s%-7s%s cpu=%-5s age=%-12s duplicate %s under %s ${DIM}(--dupes to kill)${NC}\n" \
         "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$sig" "$owner"
+      # reported but not queued: killing these needs --dupes
+      row "$pid" "$SECTION" "needs-dupes-flag" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
     fi
   done
 done < <(echo "$TBL" | awk -F'\t' 'NF{print $1"\t"$2}' | sort -u)
@@ -350,6 +392,7 @@ if [ $SHOW_SESSIONS -eq 1 ]; then
       tag="${DIM}unknown${NC}"; mins=0
     fi
     printf "    %-7s %-22s %s\n" "$pid" "$tag" "$(basename "$cwd")"
+    row "$pid" "$SECTION" "never-killed" "$(cpu_of $pid)" "${mins}m-idle" "Claude Code session in $(basename "$cwd")"
     any=1
   done
   [ $any -eq 0 ] && echo "  ${GRN}none${NC}"
@@ -371,4 +414,34 @@ else
   fi
 fi
 [ "$swap_pct" -gt 80 ] && echo "${YLW}Note:${NC} swap is ${swap_pct}% full — a restart is the only real fix for that."
+
+# ---- machine-readable output ----------------------------------------------
+# Restore the real stdout parked on fd 4 and print exactly one JSON object.
+if [ "$JSON" -eq 1 ]; then
+  exec 1>&4 4>&-
+  printf '{\n'
+  printf '  "mode": "%s",\n' "$MODE"
+  printf '  "host": {"load": %s, "cores": %s, "swap_used_mb": %s, "swap_total_mb": %s, "swap_pct": %s, "uptime_days": %s},\n' \
+    "${load:-0}" "${cores:-0}" "${swap_used:-0}" "${swap_tot:-0}" "${swap_pct:-0}" \
+    "$(uptime | sed -n 's/.*up \([0-9]*\) day.*/\1/p' | head -1 | grep -E '^[0-9]+$' || echo 0)"
+  printf '  "summary": {"reapable": %s, "killed": %s},\n' "$FOUND" "$KILLED"
+  printf '  "findings": [\n'
+  first=1
+  while IFS=$'\t' read -r p sec act cpu age detail; do
+    [ -n "$p" ] || continue
+    # a queued process that flush_kills actually reaped is reported as killed
+    case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac
+    [ $first -eq 1 ] || printf ',\n'
+    first=0
+    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "age": "%s", "detail": "%s"}' \
+      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "$(jesc "$age")" "$(jesc "$detail")"
+  done < "$ROWS"
+  [ $first -eq 0 ] && printf '\n'
+  printf '  ]\n}\n'
+fi
+
+# Exit code is the verdict, so a caller need not parse anything at all.
+#   0  clean, or a kill run that finished
+#  10  report mode with findings a human should look at
+if [ "$MODE" = report ] && [ "$FOUND" -gt 0 ]; then exit 10; fi
 exit 0

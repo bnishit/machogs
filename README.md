@@ -81,7 +81,44 @@ mac-cleanup kill            # kill the safe categories
 mac-cleanup kill --dupes    # also kill duplicate MCP servers
 mac-cleanup --sessions      # also list idle Claude Code sessions
 mac-cleanup --check         # audit the safety net, kill nothing
+mac-cleanup --json          # machine-readable, for agents
 ```
+
+## Let your agent drive it
+
+Most people hitting this problem will not be reading a fan-noise script — they
+will be asking Claude Code, Codex, Cursor or a bot to work out why their Mac is
+slow. So the tool is built to be driven, not just typed.
+
+`--json` prints exactly one object on stdout and nothing else, and the exit code
+carries the verdict so a wrapper does not have to parse anything at all:
+
+```sh
+mac-cleanup --json --sessions
+# exit 0  = clean
+# exit 10 = findings a human should look at
+```
+
+```json
+{
+  "mode": "report",
+  "host": {"load": 4.27, "cores": 10, "swap_pct": 97, "uptime_days": 20},
+  "summary": {"reapable": 0, "killed": 0},
+  "findings": [
+    {"pid": 57377, "section": "2b", "action": "needs-dupes-flag",
+     "cpu": 0.0, "age": "01:09:11",
+     "detail": "duplicate playwright-mcp under ChatGPT"}
+  ]
+}
+```
+
+Every finding carries an `action`, so an agent knows what it is allowed to do:
+`reapable`, `needs-dupes-flag`, `protected`, `never-killed`, or `killed`.
+
+**[AGENTS.md](AGENTS.md) is the instruction sheet for agents** — the workflow to
+follow, the JSON shape, and the things an agent must not do (chiefly: never kill
+before showing the user, and never work around a `protected` verdict by reaching
+for `kill -9` directly). Point your agent at it, or drop it in your project.
 
 ## What it looks for
 
