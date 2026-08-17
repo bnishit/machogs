@@ -147,9 +147,9 @@ h1 .loud{color:var(--pink)}
 .cmd{
   display:flex;align-items:center;gap:12px;
   background:var(--panel);border:1px solid var(--line);border-radius:10px;
-  padding:15px 16px;margin:14px 0;overflow-x:auto;
+  padding:15px 16px;margin:14px 0;
 }
-.cmd code{flex:1;white-space:pre;font-size:13.5px;color:var(--cream)}
+.cmd code{flex:1;white-space:pre;font-size:13.5px;color:var(--cream);overflow-x:auto}
 .cmd code .p{color:var(--cream-dim)}
 .copy{
   font-family:var(--mono);font-size:12.5px;font-weight:600;
@@ -184,7 +184,8 @@ p b{color:var(--amber);font-weight:600}
   background:var(--ink2);border:1px solid var(--line);border-radius:10px;
   padding:18px 18px 15px;
 }
-.stat .n{font-family:var(--disp);font-weight:800;font-size:34px;color:var(--amber);line-height:1}
+.stat .n{display:block;font-family:var(--disp);font-weight:800;font-size:34px;color:var(--amber);line-height:1}
+.stat .t{display:block}
 .stat .n.pk{color:var(--pink)}
 .stat .n.gr{color:var(--green)}
 .stat .t{color:var(--cream-dim);font-size:13.5px;margin-top:8px;line-height:1.5}
