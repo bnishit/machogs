@@ -76,6 +76,13 @@ struct DiskItem: Codable, Identifiable {
         default: return "Your call:"
         }
     }
+    var verdictColor: Color {
+        switch verdict {
+        case "safe": return .green
+        case "check": return .orange
+        default: return .blue
+        }
+    }
 }
 
 struct DiskReport: Codable {
@@ -117,6 +124,23 @@ struct FindingGroup: Identifiable {
     var totalCPUSeconds: Int { members.reduce(0) { $0 + $1.cpu_seconds } }
 }
 
+// MARK: - Juice (sound + haptics)
+
+enum Sfx {
+    static var on: Bool {
+        UserDefaults.standard.object(forKey: "soundOn") == nil
+            || UserDefaults.standard.bool(forKey: "soundOn")
+    }
+    // System sounds ship with macOS, so the app stays asset-free.
+    static func pop()  { play("Pop") }
+    static func win()  { play("Glass") }
+    static func play(_ name: String) {
+        guard on else { return }
+        NSSound(named: name)?.play()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+    }
+}
+
 // MARK: - Engine wrapper
 
 @MainActor
@@ -130,6 +154,7 @@ final class Engine: ObservableObject {
     @Published var diskLoading = false
     @Published var portsReport: PortsReport?
     @Published var portsLoading = false
+    @Published var celebrate = 0   // bumping this fires the confetti cannon
 
     private var timer: Timer?
     private var started = false
@@ -167,9 +192,11 @@ final class Engine: ObservableObject {
                 case .success(let report):
                     self.report = report
                     let closable = report.findings.filter { $0.closable }
-                    self.groups = Dictionary(grouping: closable, by: { $0.story })
-                        .map { FindingGroup(story: $0.key, members: $0.value) }
-                        .sorted { $0.totalCPU > $1.totalCPU }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                        self.groups = Dictionary(grouping: closable, by: { $0.story })
+                            .map { FindingGroup(story: $0.key, members: $0.value) }
+                            .sorted { $0.totalCPU > $1.totalCPU }
+                    }
                 case .failure(let err):
                     self.errorText = err.message
                 }
@@ -219,7 +246,8 @@ final class Engine: ObservableObject {
             await MainActor.run {
                 self.diskLoading = false
                 switch result {
-                case .success(let d): self.diskReport = d
+                case .success(let d):
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { self.diskReport = d }
                 case .failure(let e): self.errorText = e.message
                 }
             }
@@ -234,7 +262,8 @@ final class Engine: ObservableObject {
             await MainActor.run {
                 self.portsLoading = false
                 switch result {
-                case .success(let p): self.portsReport = p
+                case .success(let p):
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { self.portsReport = p }
                 case .failure(let e): self.errorText = e.message
                 }
             }
@@ -244,8 +273,15 @@ final class Engine: ObservableObject {
     func freePort(_ item: PortItem) {
         guard item.killable else { return }
         if kill(pid_t(item.pid), SIGKILL) == 0 {
-            receipt = "🔌 Freed port \(item.port) (closed \(item.process))."
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.checkPorts() }
+            Sfx.pop()
+            celebrate += 1
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                receipt = "🔌 Port \(item.port) is free. Go run your thing."
+                if let p = portsReport {
+                    portsReport = PortsReport(mode: p.mode, ports: p.ports.filter { $0.id != item.id })
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.checkPorts() }
         }
     }
 
@@ -263,12 +299,17 @@ final class Engine: ObservableObject {
             }
         }
         guard closed > 0 else { return }
+        Sfx.pop()
+        celebrate += 1
         var lines = ["🎉 Closed \(closed) program\(closed == 1 ? "" : "s")."]
         let cores = freedCPU / 100
         if cores >= 0.2 { lines.append("Got back \(String(format: "%.1f", cores)) of a CPU core.") }
         let charges = freedSecs / 9000  // ~6W core, ~15Wh phone battery
         if charges >= 2 { lines.append("⚡ The wasted power ≈ \(charges) phone charges.") }
-        receipt = lines.joined(separator: " ")
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+            receipt = lines.joined(separator: " ")
+            groups.removeAll { $0.id == group.id }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
     }
 
@@ -290,90 +331,353 @@ final class Engine: ObservableObject {
     }
 }
 
+// MARK: - Reusable juice
+
+// Buttons squish like something physical. Every tappable thing uses this.
+struct Squish: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.5), value: configuration.isPressed)
+    }
+}
+
+// Cards lift toward the cursor.
+struct HoverLift: ViewModifier {
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hovering ? 1.015 : 1)
+            .shadow(color: .black.opacity(hovering ? 0.16 : 0.05),
+                    radius: hovering ? 8 : 3, y: hovering ? 4 : 1)
+            .onHover { h in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { hovering = h }
+            }
+    }
+}
+
+// The mascot idles with a slow breath; while scanning it gets excited.
+struct MascotPig: View {
+    let hot: Bool
+    let refreshing: Bool
+    @State private var breathe = false
+    var body: some View {
+        Text(hot ? "🔥" : "🐷")
+            .font(.system(size: 36))
+            .scaleEffect(breathe ? 1.07 : 0.96)
+            .rotationEffect(.degrees(breathe ? 4 : -4))
+            .animation(.easeInOut(duration: refreshing ? 0.3 : 1.8).repeatForever(autoreverses: true),
+                       value: breathe)
+            .shadow(color: (hot ? Color.orange : Color.pink).opacity(0.5), radius: 10)
+            .onAppear { breathe = true }
+    }
+}
+
+// Emoji confetti cannon, drawn on a Canvas so 30 particles cost nothing.
+struct ConfettiBurst: View {
+    let trigger: Int
+
+    struct P {
+        let emoji: String
+        let x: CGFloat
+        let vx: CGFloat
+        let vy: CGFloat
+        let size: CGFloat
+        let delay: Double
+    }
+
+    @State private var particles: [P] = []
+    @State private var start: Date?
+    @State private var active = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !active)) { timeline in
+            Canvas { ctx, size in
+                guard let start else { return }
+                let t = timeline.date.timeIntervalSince(start)
+                for p in particles {
+                    let pt = t - p.delay
+                    guard pt > 0, pt < 1.4 else { continue }
+                    let x = size.width * p.x + p.vx * pt
+                    let y = size.height * 0.22 + p.vy * pt + 520 * pt * pt
+                    ctx.opacity = max(0, 1.25 - pt)
+                    ctx.draw(ctx.resolve(Text(p.emoji).font(.system(size: p.size))),
+                             at: CGPoint(x: x, y: y))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .onChange(of: trigger) { fired in
+            guard fired > 0 else { return }
+            let emojis = ["🎉", "✨", "⚡", "💥", "🐷"]
+            particles = (0..<30).map { _ in
+                P(emoji: emojis.randomElement() ?? "🎉",
+                  x: CGFloat.random(in: 0.3...0.7),
+                  vx: CGFloat.random(in: -240...240),
+                  vy: CGFloat.random(in: -460 ... -180),
+                  size: CGFloat.random(in: 13...26),
+                  delay: Double.random(in: 0...0.12))
+            }
+            start = Date()
+            active = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { active = false }
+        }
+    }
+}
+
+// The disk fills up like a battery gauge, springing to its level.
+struct DiskGauge: View {
+    let pct: Int
+    @State private var shown = false
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: pct >= 90 ? [.orange, .red] : [.teal, .green],
+                        startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(6, geo.size.width * CGFloat(pct) / 100) * (shown ? 1 : 0.02))
+            }
+        }
+        .frame(height: 7)
+        .onAppear {
+            withAnimation(.spring(response: 0.9, dampingFraction: 0.8).delay(0.15)) { shown = true }
+        }
+    }
+}
+
 // MARK: - UI
 
 struct ContentView: View {
     @ObservedObject var engine: Engine
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @AppStorage("soundOn") private var soundOn = true
+    @State private var appeared = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            if let err = engine.errorText {
-                Text(err).font(.callout).foregroundStyle(.red)
-            }
-            if engine.swapTrouble {
-                banner("🌡️ Your Mac is out of fast memory after \(engine.report?.host.uptime_days ?? 0) days on. Closing programs won't fix that part — restart when you can.")
-            }
-            if let receipt = engine.receipt {
-                banner(receipt, color: .green)
-            }
-            if engine.clean && engine.errorText == nil {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("✨ Nothing is hogging your Mac.").font(.headline)
-                    Text("No stuck or abandoned programs. It's just vibing.")
-                        .font(.callout).foregroundStyle(.secondary)
+        ZStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                    .reveal(appeared, delay: 0)
+                if let err = engine.errorText {
+                    banner(err, colors: [.red.opacity(0.9), .red])
                 }
-            } else {
+                if engine.swapTrouble {
+                    banner("🌡️ Your Mac is out of fast memory after \(engine.report?.host.uptime_days ?? 0) days on. Closing programs won't fix that part — restart when you can.",
+                           colors: [.orange, .red.opacity(0.85)])
+                }
+                if let receipt = engine.receipt {
+                    banner(receipt, colors: [.green, .teal])
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                }
+                hogs
+                    .reveal(appeared, delay: 0.05)
+                sectionBox { ports }
+                    .reveal(appeared, delay: 0.1)
+                sectionBox { storage }
+                    .reveal(appeared, delay: 0.15)
+                footer
+                    .reveal(appeared, delay: 0.2)
+            }
+            .padding(14)
+
+            ConfettiBurst(trigger: engine.celebrate)
+        }
+        .frame(width: 400)
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: engine.receipt)
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appeared = true }
+        }
+    }
+
+    // MARK: header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            MascotPig(hot: engine.hot, refreshing: engine.refreshing)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(headline)
+                    .font(.system(.headline, design: .rounded).weight(.bold))
+                Text(subline)
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(engine.clean ? Color.green : Color.orange)
+            }
+            Spacer()
+            Button {
+                engine.refresh()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .bold))
+                    .rotationEffect(.degrees(engine.refreshing ? 360 : 0))
+                    .animation(engine.refreshing
+                               ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                               : .default,
+                               value: engine.refreshing)
+                    .padding(6)
+                    .background(Circle().fill(Color.primary.opacity(0.07)))
+            }
+            .buttonStyle(Squish())
+            .help("Check again")
+        }
+    }
+
+    private var headline: String {
+        if engine.hot { return "Found the hog." }
+        if engine.clean { return "machogs" }
+        return "Leftovers found."
+    }
+
+    private var subline: String {
+        if engine.refreshing { return "sniffing around…" }
+        if engine.hot { return "something is cooking your CPU" }
+        if engine.clean { return "all clear — your Mac is vibing ✨" }
+        return "idle junk holding memory"
+    }
+
+    // MARK: hogs
+
+    @ViewBuilder
+    private var hogs: some View {
+        if engine.clean && engine.errorText == nil {
+            HStack(spacing: 10) {
+                Text("✨")
+                    .font(.system(size: 24))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Nothing is hogging your Mac.")
+                        .font(.system(.callout, design: .rounded).weight(.semibold))
+                    Text("No stuck or abandoned programs anywhere.")
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(LinearGradient(colors: [Color.green.opacity(0.12), Color.teal.opacity(0.10)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.green.opacity(0.25), lineWidth: 1)
+            )
+        } else {
+            VStack(spacing: 8) {
                 ForEach(engine.groups) { group in
                     card(group)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 6)),
+                            removal: .scale(scale: 0.8).combined(with: .opacity)))
                 }
             }
-            Divider()
-            ports
-            Divider()
-            storage
-            Divider()
-            footer
         }
-        .padding(14)
-        .frame(width: 380)
     }
+
+    private func card(_ group: FindingGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(group.story)
+                .font(.system(.callout, design: .rounded))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                if group.hot {
+                    tag("🔥 \(String(format: "%.0f", group.totalCPU))% of a core", .orange)
+                } else {
+                    tag("💤 idle, holding memory", .secondary)
+                }
+                Spacer()
+                pill(group.count > 1 ? "Close all \(group.count) 💥" : "Close it 💥",
+                     tint: group.hot ? .orange : .pink) {
+                    engine.close(group)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    group.hot
+                    ? AnyShapeStyle(LinearGradient(colors: [.orange, .red.opacity(0.6)],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+                    : AnyShapeStyle(Color.primary.opacity(0.08)),
+                    lineWidth: 1)
+        )
+        .modifier(HoverLift())
+    }
+
+    // MARK: ports
 
     private var ports: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("🔌 Ports").font(.headline)
+                sectionTitle("🔌", "Ports")
                 Spacer()
                 if engine.portsLoading {
                     ProgressView().controlSize(.small)
                 } else {
-                    Button(engine.portsReport == nil ? "Check" : "Re-check") { engine.checkPorts() }
-                        .controlSize(.small)
+                    ghost(engine.portsReport == nil ? "Check" : "Re-check") { engine.checkPorts() }
                 }
             }
             if let p = engine.portsReport {
                 if p.ports.isEmpty {
-                    Text("Nothing is listening on any port.").font(.caption).foregroundStyle(.secondary)
+                    Text("Nothing is listening on any port.")
+                        .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
                 }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 7) {
                         ForEach(p.ports) { item in
-                            VStack(alignment: .leading, spacing: 1) {
-                                HStack {
-                                    Text(":\(String(item.port))").font(.callout.monospacedDigit()).bold()
-                                    Text(item.process).font(.callout).lineLimit(1)
-                                    Spacer()
-                                    if item.killable {
-                                        Button("Free it") { engine.freePort(item) }.controlSize(.mini)
-                                    } else if item.protected {
-                                        Text("your session").font(.caption2).foregroundStyle(.green)
-                                    } else {
-                                        Text("macOS").font(.caption2).foregroundStyle(.secondary)
-                                    }
-                                }
-                                Text(subtitle(for: item))
-                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                            }
+                            portRow(item)
+                                .transition(.asymmetric(
+                                    insertion: .opacity,
+                                    removal: .move(edge: .trailing).combined(with: .opacity)))
                         }
                     }
+                    .padding(.trailing, 2)
                 }
-                .frame(maxHeight: 220)
+                .frame(maxHeight: 210)
             } else if !engine.portsLoading {
                 Text("\"Port already in use\"? Find out who is squatting it.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func portRow(_ item: PortItem) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(":\(String(item.port))")
+                    .font(.system(.caption, design: .monospaced).weight(.bold))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(portTint(item).opacity(0.16)))
+                    .foregroundStyle(portTint(item))
+                Text(item.process)
+                    .font(.system(.callout, design: .rounded))
+                    .lineLimit(1)
+                Spacer()
+                if item.killable {
+                    pill("Free it ⚡", tint: .pink) { engine.freePort(item) }
+                } else if item.protected {
+                    tag("your session", .green)
+                } else {
+                    tag("macOS", .secondary)
+                }
+            }
+            Text(subtitle(for: item))
+                .font(.system(.caption2, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .padding(.leading, 2)
+        }
+    }
+
+    private func portTint(_ item: PortItem) -> Color {
+        if item.protected { return .green }
+        if !item.killable { return .secondary }
+        return .cyan
     }
 
     private func subtitle(for item: PortItem) -> String {
@@ -385,106 +689,144 @@ struct ContentView: View {
         return bits.joined(separator: " · ")
     }
 
+    // MARK: storage
+
     private var storage: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("💾 Storage").font(.headline)
+                sectionTitle("💾", "Storage")
                 Spacer()
                 if engine.diskLoading {
                     ProgressView().controlSize(.small)
                 } else {
-                    Button(engine.diskReport == nil ? "Check" : "Re-check") { engine.checkDisk() }
-                        .controlSize(.small)
+                    ghost(engine.diskReport == nil ? "Check" : "Re-check") { engine.checkDisk() }
                 }
             }
             if let d = engine.diskReport {
-                Text("\(d.disk.used_gb) GB used of \(d.disk.total_gb) GB (\(d.disk.pct)% full)")
-                    .font(.callout)
-                    .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                VStack(alignment: .leading, spacing: 4) {
+                    DiskGauge(pct: d.disk.pct)
+                    Text("\(d.disk.used_gb) GB used of \(d.disk.total_gb) GB (\(d.disk.pct)% full)")
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundStyle(d.disk.pct >= 90 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                }
                 if d.items.isEmpty {
                     Text("Nothing chunky in the usual junk spots — whatever fills your disk is your real files.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
                 }
                 ForEach(d.items) { item in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("\(item.icon) \(item.label)").font(.callout)
-                            Spacer()
-                            Text(item.sizeText).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                            Button("Show") {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-                            }
-                            .controlSize(.mini)
-                        }
-                        Text("\(item.verdictText) \(item.how)")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    diskRow(item)
                 }
                 Text("Nothing is deleted. It points; you decide.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.system(.caption2, design: .rounded)).foregroundStyle(.tertiary)
             } else if !engine.diskLoading {
                 Text("Where did your storage go? Takes ~15 seconds.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
             }
         }
     }
 
-    private var header: some View {
-        HStack {
-            Text(engine.hot ? "🐷 Found the hog." : (engine.clean ? "🐷 machogs" : "🧹 Leftovers found."))
-                .font(.headline)
-            Spacer()
-            if engine.refreshing {
-                ProgressView().controlSize(.small)
-            } else {
-                Button { engine.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Check again")
-            }
-        }
-    }
-
-    private func card(_ group: FindingGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(group.story)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                if group.hot {
-                    Text("🔥 \(String(format: "%.0f", group.totalCPU))% of a CPU core")
-                        .font(.caption).foregroundStyle(.orange)
-                } else {
-                    Text("💤 idle, holding memory")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+    private func diskRow(_ item: DiskItem) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(item.icon) \(item.label)")
+                    .font(.system(.callout, design: .rounded))
                 Spacer()
-                Button(group.count > 1 ? "Close all \(group.count)" : "Close it") {
-                    engine.close(group)
+                Text(item.sizeText)
+                    .font(.system(.callout, design: .monospaced).weight(.semibold))
+                ghost("Show") {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(group.hot ? .orange : .accentColor)
-                .controlSize(.small)
             }
+            HStack(spacing: 4) {
+                Text(item.verdictText)
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundStyle(item.verdictColor)
+                Text(item.how)
+                    .font(.system(.caption2, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
     }
 
-    private func banner(_ text: String, color: Color = .orange) -> some View {
-        Text(text)
-            .font(.callout)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(8)
+    // MARK: shared pieces
+
+    private func sectionBox<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+        content()
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.15)))
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+            )
+    }
+
+    private func sectionTitle(_ emoji: String, _ title: String) -> some View {
+        HStack(spacing: 6) {
+            Text(emoji)
+            Text(title).font(.system(.subheadline, design: .rounded).weight(.bold))
+        }
+    }
+
+    // Gradient action pill — the only kind of "do something" button in the app.
+    private func pill(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.caption, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(
+                    Capsule().fill(LinearGradient(colors: [tint, tint.opacity(0.7)],
+                                                  startPoint: .top, endPoint: .bottom))
+                )
+                .shadow(color: tint.opacity(0.45), radius: 4, y: 1)
+        }
+        .buttonStyle(Squish())
+    }
+
+    // Quiet secondary button.
+    private func ghost(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.caption, design: .rounded).weight(.semibold))
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Capsule().fill(Color.primary.opacity(0.07)))
+        }
+        .buttonStyle(Squish())
+    }
+
+    private func tag(_ text: String, _ color: Color) -> some View {
+        Text(text)
+            .font(.system(.caption2, design: .rounded).weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.12)))
+    }
+
+    private func banner(_ text: String, colors: [Color]) -> some View {
+        Text(text)
+            .font(.system(.callout, design: .rounded).weight(.medium))
+            .foregroundStyle(.white)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(LinearGradient(colors: colors.map { $0.opacity(0.9) },
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+            )
+            .shadow(color: (colors.first ?? .clear).opacity(0.35), radius: 6, y: 2)
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 10) {
             Toggle("Start at login", isOn: $launchAtLogin)
                 .toggleStyle(.checkbox)
-                .font(.callout)
+                .font(.system(.caption, design: .rounded))
                 .onChange(of: launchAtLogin) { on in
                     do {
                         if on { try SMAppService.mainApp.register() }
@@ -493,11 +835,33 @@ struct ContentView: View {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
                     }
                 }
+            Button {
+                soundOn.toggle()
+                if soundOn { Sfx.pop() }
+            } label: {
+                Image(systemName: soundOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+            }
+            .buttonStyle(Squish())
+            .help(soundOn ? "Sounds on" : "Sounds off")
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }
-                .buttonStyle(.borderless)
-                .font(.callout)
+                .buttonStyle(Squish())
+                .font(.system(.caption, design: .rounded))
+                .foregroundStyle(.secondary)
         }
+    }
+}
+
+// Staggered entrance: each section fades in a beat after the one above it.
+extension View {
+    func reveal(_ appeared: Bool, delay: Double) -> some View {
+        self
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 10)
+            .animation(.spring(response: 0.5, dampingFraction: 0.8).delay(delay), value: appeared)
     }
 }
 
