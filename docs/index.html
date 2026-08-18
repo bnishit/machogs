@@ -10,7 +10,11 @@
 <meta property="og:description" content="Slow, hot, loud fan, battery gone by lunch: usually one stuck program nobody is using. machogs finds it and explains it in plain English. Free, open source, agent-ready.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://bnishit.github.io/machogs/">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://bnishit.github.io/machogs/img/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://bnishit.github.io/machogs/img/og.jpg">
 <meta name="twitter:title" content="machogs — find out what is hogging your Mac">
 <meta name="twitter:description" content="Your Mac is slow, hot, and loud. This tells you what is doing it, in plain English.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐷</text></svg>">
@@ -94,11 +98,17 @@ a:hover{color:var(--cream)}
 ::selection{background:var(--amber);color:var(--ink)}
 
 /* ---------- hero ---------- */
-header{padding:76px 0 8px}
-.pig{
-  font-size:64px;line-height:1;display:inline-block;
-  filter:drop-shadow(0 6px 24px rgba(255,157,176,.35));
-  animation:snuffle 5s ease-in-out infinite;
+header{padding:64px 0 8px;display:flex;align-items:center;gap:16px}
+.hero-text{flex:1;min-width:0}
+.hero-art{
+  flex:0 0 auto;width:min(300px,34vw);height:auto;
+  -webkit-mask-image:radial-gradient(closest-side,#000 55%,transparent 99%);
+  mask-image:radial-gradient(closest-side,#000 55%,transparent 99%);
+  animation:snuffle 7s ease-in-out infinite;
+}
+@media(max-width:700px){
+  header{flex-direction:column-reverse;gap:0;padding-top:40px}
+  .hero-art{width:230px;align-self:center;margin-bottom:-10px}
 }
 @keyframes snuffle{
   0%,100%{transform:rotate(-4deg)}
@@ -252,11 +262,14 @@ footer{
 <div class="wrap">
 
 <header>
-  <span class="pig" aria-hidden="true">🐷</span>
+  <div class="hero-text">
   <h1>Your Mac is slow,<br><span class="hot">hot</span>, and <span class="loud">loud</span>.</h1>
   <p class="sub"><b>machogs</b> finds the program doing it and tells you in plain English —
   what it is, which app left it behind, and what it has cost you. Then it asks, politely,
   before closing anything.</p>
+  </div>
+  <img class="hero-art" src="img/hero-pig.jpg" width="900" height="900"
+       alt="A fat smug pig sprawled on a hot, glowing MacBook, heat rising off it">
 </header>
 
 <div class="term" aria-label="machogs terminal output">
