@@ -5,9 +5,10 @@ to work out why a Mac is slow or its fan is loud.
 
 ## The tool
 
-`machogs` inspects running processes and reports the ones worth killing. It
-deletes no files. Report mode is the default; killing always requires an
-explicit `kill` argument.
+`machogs` inspects running processes and reports the ones worth closing. The
+default process, disk, and port reports are read-only. Process and port actions
+need an explicit `kill`; cache clearing needs `disk clear <path>` and is limited
+to an engine allow-list of rebuildable caches and the Trash.
 
 ## Use this workflow
 
@@ -46,6 +47,12 @@ Use `machogs kill` for unattended work.
 - **Never lower the thresholds to make findings appear.** `HOT_CPU` and
   `SPIN_CPU_SECONDS` exist for testing the detector. Lowering them in real use
   turns busy processes into false positives you will then kill.
+- **Never clear a cache before showing the disk finding and asking.** Only pass
+  back the exact path from a `safe` item. Never improvise a path, and never use
+  `check` or `yours` items as deletion targets.
+- **Never free a port before showing its owner, project, protections, and note.**
+  A system or protected listener stays. If `note` explains a setting or service
+  command, relay that instead of trying to kill the process.
 
 ## Exit codes
 
@@ -56,6 +63,7 @@ Enough to act on without parsing anything.
 | `0` | clean, or a `kill` run that finished |
 | `10` | report mode found something a human should look at |
 | `2` | bad arguments |
+| `3` | `disk clear` refused the path or found no target |
 
 ## JSON shape
 
@@ -112,27 +120,27 @@ Duplicate MCP servers are not counted unless `--dupes` was passed, so a run
 reporting `reapable: 0` can still have findings worth showing the user. Read
 `findings`, not just the summary.
 
-## Three extra commands worth surfacing
+## Other jobs worth surfacing
 
-All read-only; none touch processes or files.
+The report forms below are read-only. Their action forms are not.
 
 - `machogs blame` — a scoreboard of which app leaves the most behind on this
   machine, built from the log over time. Useful when the user asks "why does
   this keep happening?"
 - `machogs brag` — the same totals as a card the user can paste somewhere.
   Offer it only if they seem pleased; never push it.
-- `machogs disk` (or `machogs disk --json`) — the storage X-ray for "why is my
-  disk full?". Measures the usual junk spots (caches, Docker image, iPhone
-  backups, Xcode junk, Trash, Downloads) with a `verdict` per item: `safe`,
-  `check`, or `yours`. It DELETES NOTHING and neither should you — relay the
-  `how` field and let the user do the deleting themselves. Takes ~15s.
+- `machogs disk` (or `machogs disk --json`) — the read-only storage X-ray for
+  "why is my disk full?". It measures the usual junk spots with a `verdict` per
+  item: `safe`, `check`, or `yours`. Relay the `how` field. After explicit
+  consent, `machogs disk clear <exact-safe-path>` clears one allow-listed cache
+  or the Trash. The engine refuses all other paths. Takes about 15 seconds.
 - `machogs ports` / `machogs port <n>` (both take `--json`) — who is squatting
   which port; the answer to "port 3000 already in use". `machogs port <n> kill`
   frees a port, with the usual refusals: `system: true` and noted launchd
   squatters (AirPlay's ControlCenter on 5000/7000 — relay the `note`, killing
-  it does not stick) are never killed, `protected: true` means a live Claude
-  Code session holds it — tell the user to quit it there. Ask before freeing
-  a port, same as every other kill.
+  it does not stick) are never killed. `protected: true` means a live Claude
+  Code session holds it; tell the user to quit it there. Ask before freeing a
+  port, same as every other kill.
 
 The log they read is `~/Library/Logs/machogs.log`, one tab-separated line per
 close: time, pid, app to blame, what it was, CPU%, CPU seconds.

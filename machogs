@@ -14,6 +14,8 @@
 #   machogs --details       the technical report, by category
 #   machogs kill            close everything reapable, no questions (scripts)
 #   machogs kill --dupes    also close duplicate MCP servers (keeps newest)
+#   machogs plan --target=123:ID  recheck reviewed process identities (app JSON)
+#   machogs kill --target=123:ID  close only identities returned by a fresh plan
 #   machogs --sessions      list Claude Code sessions too (never closed)
 #   machogs --json          machine-readable output, for agents (see below)
 #
@@ -70,10 +72,11 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
+    plan)        MODE=plan ;;
     ports|port)  PORTS=1 ;;
     fix)         MODE=fix ;;
     blame)       MODE=blame ;;
@@ -86,6 +89,13 @@ for a in "$@"; do
     [0-9]*)      if [ "$PORTS" -eq 1 ]; then PORT_NUM=$a; else
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
     --dupes)     DUPES=1 ;;
+    --target=*)
+      target=${a#--target=}; target_pid=${target%%:*}; target_id=${target#*:}
+      case "$target_pid:$target_id" in
+        ''|*[!0-9:]*|0:*|*:|*:*:*) echo "bad target: $target" >&2; exit 2 ;;
+      esac
+      TARGETS="$TARGETS $target"
+      ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
@@ -95,10 +105,20 @@ for a in "$@"; do
   esac
 done
 
+if [ -n "$TARGETS" ] && [ "$MODE" != kill ] && [ "$MODE" != plan ]; then
+  echo "--target goes with plan or kill" >&2
+  exit 2
+fi
+if [ "$MODE" = plan ] && { [ -z "$TARGETS" ] || [ "$JSON" -ne 1 ]; }; then
+  echo "plan needs --json and at least one --target=PID:IDENTITY" >&2
+  exit 2
+fi
+
 # `fix` confirms every single close with the person sitting there, so the
 # --dupes gate is redundant: it exists to stop unattended runs reaping things
 # nobody looked at. An attended run looks at all of them.
 [ "$MODE" = fix ] && DUPES=1
+[ "$MODE" = plan ] && DUPES=1
 
 # Plain language is the default. --details, --json and --check are the ways to
 # ask for the technical view instead.
@@ -121,7 +141,7 @@ trap 'rm -f "$ROWS" "$GRP"' EXIT
 # row <pid> <category> <action> <cpu> <age> <detail>
 # Tab-separated. Nothing here may contain a tab or newline; the fields are all
 # pids, numbers, and process names, so that holds.
-row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$(cputime_of "$1")" >> "$ROWS"; }
+row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$(cputime_of "$1")" "$(identity_of "$1")" >> "$ROWS"; }
 
 # Total CPU seconds this process has consumed since it started.
 cputime_of() { cpusecs "$(ps -o time= -p "$1" 2>/dev/null | tr -d ' ')"; }
@@ -359,6 +379,18 @@ cpu_of()   { ps -o pcpu= -p "$1" 2>/dev/null | tr -d ' '; }
 etime_of() { ps -o etime= -p "$1" 2>/dev/null | tr -d ' '; }
 alive()    { kill -0 "$1" 2>/dev/null; }
 short()    { sed 's|.*/||' | cut -c1-46; }
+
+# A PID is reusable; PID + process start time is not. The app carries this
+# opaque identity from scan to plan to action, and the engine compares it at
+# each step. Never derive safety from a stale PID alone.
+identity_of() {
+  ps -o lstart= -o command= -p "$1" 2>/dev/null | cksum | awk '{print $1}'
+}
+
+targeted() {
+  [ -z "$TARGETS" ] && return 0
+  case " $TARGETS " in *" $1:$2 "*) return 0 ;; *) return 1 ;; esac
+}
 
 # macOS ps prints TIME as MMMM:SS.ss — minutes are NOT wrapped at 60
 # ("6638:43.89" is 110 hours). Convert to whole seconds.
@@ -678,13 +710,38 @@ if [ "$PORTS" -eq 1 ]; then
     [ -z "$note" ] && note=$(service_note "$pid")
     sys=0; [ "$uid" != "$ME_UID" ] && sys=1
     prot=0; protected "$pid" && prot=1
+    identity=$(identity_of "$pid")
+    action="report"
+
+    if [ "$MODE" = kill ] && [ -n "$PORT_NUM" ]; then
+      if ! targeted "$pid" "$identity"; then
+        action="identity-changed"
+      elif [ $sys -eq 1 ] || [ -n "$note" ]; then
+        action="refused-system"
+      elif [ $prot -eq 1 ]; then
+        action="refused-protected"
+      else
+        w=$(whatis "$pid"); cpu=$(cpu_of "$pid"); csec=$(cputime_of "$pid")
+        # Re-check both gates at the last possible moment.
+        if protected "$pid"; then
+          action="refused-protected"
+        elif [ "$(identity_of "$pid")" != "$identity" ]; then
+          action="identity-changed"
+        elif kill -9 "$pid" 2>/dev/null; then
+          logclose "$pid" "$o" "$w" "$cpu" "$csec"
+          FREED=$((FREED+1)); action="killed"
+        else
+          action="failed"
+        fi
+      fi
+    fi
 
     if [ "$JSON" -eq 1 ]; then
       [ $first -eq 1 ] || printf ',\n'
       first=0
-      printf '    {"port": %s, "pid": %s, "process": "%s", "owner": "%s", "cwd": "%s", "age": "%s", "system": %s, "protected": %s, "note": "%s"}' \
-        "$port" "$pid" "$(jesc "$cmd")" "$(jesc "$o")" "$(jesc "$cwd")" "$(jesc "$age")" \
-        "$([ $sys -eq 1 ] && echo true || echo false)" "$([ $prot -eq 1 ] && echo true || echo false)" "$(jesc "$note")"
+      printf '    {"port": %s, "pid": %s, "identity": "%s", "process": "%s", "owner": "%s", "cwd": "%s", "age": "%s", "system": %s, "protected": %s, "note": "%s", "action": "%s"}' \
+        "$port" "$pid" "$(jesc "$identity")" "$(jesc "$cmd")" "$(jesc "$o")" "$(jesc "$cwd")" "$(jesc "$age")" \
+        "$([ $sys -eq 1 ] && echo true || echo false)" "$([ $prot -eq 1 ] && echo true || echo false)" "$(jesc "$note")" "$(jesc "$action")"
       continue
     fi
 
@@ -700,23 +757,17 @@ if [ "$PORTS" -eq 1 ]; then
     [ -n "$note" ] && echo "         ${DIM}$note${NC}"
 
     if [ "$MODE" = kill ] && [ -n "$PORT_NUM" ]; then
-      if [ $sys -eq 1 ]; then
+      case "$action" in
+      refused-system)
         echo "         ${YLW}That is a macOS system process — not killable from here.${NC}"
-      elif [ -n "$note" ]; then
-        # launchd resurrects these instantly; killing them only lies to you
-        echo "         ${YLW}Killing it wouldn't stick — macOS restarts it. Use the setting above.${NC}"
-      elif [ $prot -eq 1 ]; then
+        ;;
+      refused-protected)
         echo "         ${YLW}That belongs to a live Claude Code session. Quit it there instead.${NC}"
-      else
-        w=$(whatis "$pid"); cpu=$(cpu_of "$pid"); csec=$(cputime_of "$pid")
-        if kill -9 "$pid" 2>/dev/null; then
-          logclose "$pid" "$o" "$w" "$cpu" "$csec"
-          FREED=$((FREED+1))
-          echo "         ${GRN}Closed it. Port $PORT_NUM is free.${NC}"
-        else
-          echo "         ${RED}Couldn't close pid $pid.${NC}"
-        fi
-      fi
+        ;;
+      identity-changed) echo "         ${YLW}The listener changed after review. Nothing was closed.${NC}" ;;
+      killed) echo "         ${GRN}Closed it. Port $PORT_NUM is free.${NC}" ;;
+      failed) echo "         ${RED}Couldn't close pid $pid.${NC}" ;;
+      esac
     fi
   done < <(printf '%s\n' "$TBLP")
 
@@ -765,8 +816,13 @@ QUEUED_PIDS=""
 
 # queue <pid> <reason>
 queue() {
-  local pid=$1 reason=$2
+  local pid=$1 reason=$2 identity
   alive "$pid" || return
+  identity=$(identity_of "$pid"); [ -n "$identity" ] || return
+  # A targeted app request is deliberately narrow. A reused or already-gone
+  # process does not match, is not shown in the fresh plan, and cannot be
+  # replaced by a different current finding.
+  targeted "$pid" "$identity" || return
   # One pid, one finding. A process can match two sections (an orphaned MCP
   # server that is also spinning); the first section to claim it wins, or the
   # report shows the same process twice and fix/kill act on it twice.
@@ -778,7 +834,7 @@ queue() {
     return
   fi
   FOUND=$((FOUND+1))
-  KILL_LIST+=("$pid|$reason")
+  KILL_LIST+=("$pid|$identity|$reason")
   printf "    %s%-7s%s cpu=%-5s age=%-12s %s\n" "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$reason"
   row "$pid" "$SECTION" "reapable" "$(cpu_of $pid)" "$(etime_of $pid)" "$reason"
 }
@@ -788,10 +844,20 @@ flush_kills() {
   [ ${#KILL_LIST[@]} -eq 0 ] && return
   echo
   echo "  ${YLW}killing ${#KILL_LIST[@]} process(es)...${NC}"
-  local entry pid reason
+  local entry pid identity reason
   for entry in "${KILL_LIST[@]}"; do
-    pid=${entry%%|*}; reason=${entry#*|}
+    pid=${entry%%|*}; entry=${entry#*|}; identity=${entry%%|*}; reason=${entry#*|}
     alive "$pid" || continue
+    # Protection is time-sensitive. Check again at the last possible moment,
+    # not only when the detector first queued the process.
+    if protected "$pid"; then
+      echo "    ${DIM}skip${NC} $pid ${DIM}(became protected before close)${NC}"
+      continue
+    fi
+    if [ "$(identity_of "$pid")" != "$identity" ]; then
+      echo "    ${DIM}skip${NC} $pid ${DIM}(process identity changed before close)${NC}"
+      continue
+    fi
     # read the identity BEFORE killing; afterwards ps knows nothing about it
     local who what cpu csec
     who=$(whose "$pid"); what=$(whatis "$pid")
@@ -1042,8 +1108,9 @@ if [ "$JSON" -eq 1 ]; then
   printf '  "summary": {"reapable": %s, "killed": %s},\n' "$FOUND" "$KILLED"
   printf '  "findings": [\n'
   first=1
-  while IFS=$'\t' read -r p sec act cpu age detail csec; do
+  while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
     [ -n "$p" ] || continue
+    if [ -n "$TARGETS" ] && ! targeted "$p" "$identity"; then continue; fi
     # a queued process that flush_kills actually reaped is reported as killed
     case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac
     [ $first -eq 1 ] || printf ',\n'
@@ -1054,8 +1121,8 @@ if [ "$JSON" -eq 1 ]; then
     # closes in the format `machogs blame` reads.
     w=$(whatis "$p"); o=$(whose "$p")
     st=$(story "$sec" "$w" "$o" 1 "${cpu:-0}" "$age" "${csec:-0}")
-    printf '    {"pid": %s, "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "owner": "%s", "what": "%s", "detail": "%s", "story": "%s"}' \
-      "$p" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$o")" "$(jesc "$w")" "$(jesc "$detail")" "$(jesc "$st")"
+    printf '    {"pid": %s, "identity": "%s", "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "owner": "%s", "what": "%s", "detail": "%s", "story": "%s"}' \
+      "$p" "$(jesc "$identity")" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$o")" "$(jesc "$w")" "$(jesc "$detail")" "$(jesc "$st")"
   done < "$ROWS"
   [ $first -eq 0 ] && printf '\n'
   printf '  ]\n}\n'
@@ -1110,7 +1177,7 @@ if [ "$HUMAN" -eq 1 ]; then
     # Group identical findings. Key = section + what it is + who left it.
     # Aggregate: how many, the worst CPU in the group, the oldest age, the pids.
     ENR=$(mktemp -t machogs-enr) || exit 1
-    while IFS=$'\t' read -r p sec act cpu age detail csec; do
+    while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
       [ -n "$p" ] || continue
       alive "$p" || continue
       # "-" not "": tab is IFS whitespace, so bash COLLAPSES an empty field and

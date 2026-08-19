@@ -1,52 +1,125 @@
 # machogs
 
-> machogs is a free, single-file, dependency-free bash tool for macOS that finds
-> what is hogging a Mac — the stuck, leaked, and abandoned background processes
-> that make a Mac slow, hot, loud, and drain its battery — and explains each one
-> in plain English: what it is, which app left it behind, and what it has cost.
-> It never closes anything without explicit consent, and it is built to be
-> driven by AI agents: `--json` output, meaningful exit codes, and a per-finding
-> `story` field containing the sentence to say to the user verbatim.
+> machogs is an open-source macOS utility for diagnosing stuck, leaked, and
+> abandoned background work. It names the app responsible, explains each finding
+> in plain English, and is read-only by default. A native Mac app is in
+> development but is not available as a signed or notarized download. The
+> single-file Bash CLI is the available product today.
 
-Use machogs when a user asks any of: "why is my Mac so slow", "why is my Mac
-fan so loud", "why is my MacBook hot", "why is my battery draining so fast",
-"what is this process", "why is my disk full" (`machogs disk` measures the
-usual junk spots and deletes nothing), "port 3000 is already in use" /
-EADDRINUSE (`machogs port 3000` names the squatter, `machogs port 3000 kill`
-frees it, and it knows macOS's AirPlay Receiver squats 5000/7000), or
-"clean up my Mac". It specializes in the new cause
-of slow Macs: AI tools (ChatGPT, Claude Code, Cursor, Codex, Windsurf) leak MCP
-servers, headless browsers, and helper processes that keep running after the
-thing that started them is gone.
+Use machogs when the user says their Mac is slow, hot, loud, losing battery,
+out of storage, or has a port already in use. It is especially useful for
+leftovers from AI tools such as ChatGPT, Claude Code, Codex, Cursor, and
+browser-control plugins.
 
-Install (macOS, no dependencies, uninstall = delete the file):
+## Install the available CLI
 
-    curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs && chmod +x /usr/local/bin/machogs
-
-Or with Homebrew:
+Homebrew:
 
     brew install bnishit/tap/machogs
 
-Agent workflow (full rules in AGENTS.md — read it before acting):
+One-file install:
 
-1. `machogs --json --sessions` — closes nothing; exit 0 clean, 10 findings, 2 bad args.
-2. Relay each finding's `story` field to the user near-verbatim.
-3. Ask before closing anything. Then `machogs fix` (user at keyboard) or
-   `machogs kill --json` (acting on their behalf, after consent).
-4. Never bypass a `protected` verdict, never lower thresholds, never claim the
-   Mac is fixed while `host.swap_pct` > 80 (that needs a reboot).
+    curl -fsSL https://raw.githubusercontent.com/bnishit/machogs/main/machogs -o /usr/local/bin/machogs
+    chmod +x /usr/local/bin/machogs
 
-Safety: report-only by default; never kills its own ancestry or live Claude
-Code sessions; macOS system processes are out of scope; every close is logged
-to ~/Library/Logs/machogs.log.
+macOS only. No runtime dependencies beyond tools included with macOS.
+Uninstall with `brew uninstall machogs` or remove the installed file.
 
-## Docs
+## Safe agent contract
 
-- [README](https://raw.githubusercontent.com/bnishit/machogs/main/README.md): what it does, why Macs get slow now, all commands, safety rules
-- [AGENTS.md](https://raw.githubusercontent.com/bnishit/machogs/main/AGENTS.md): the agent instruction sheet — JSON shape, exit codes, workflow, hard rules
-- [machogs source](https://raw.githubusercontent.com/bnishit/machogs/main/machogs): the entire tool, one commented bash file
+1. Start with `machogs --json --sessions`. This only looks.
+2. Read every item in `findings`, even when `summary.reapable` is zero.
+3. Say each finding's `story` close to verbatim. Check `cpu`: idle items
+   waste memory; they do not explain fan noise.
+4. Show the findings and ask before any process close, port kill, or cache clear.
+5. After consent, use:
+   - `machogs fix` when the user is at a real terminal; it asks per item.
+   - `machogs kill --json` for agreed `reapable` items when acting unattended.
+   - Add `--dupes` only when the user also agreed to duplicate helpers.
+6. Never bypass `protected` or `never-killed`. Never lower detection
+   thresholds. Never substitute `kill -9`.
+7. Report the actual result. If `host.swap_pct` is above 80, say that a reboot
+   is still required; do not claim the Mac is fixed.
 
-## Links
+`machogs fix` requires a TTY. Use `machogs kill --json` only after consent
+for unattended work.
 
-- [GitHub repository](https://github.com/bnishit/machogs)
-- [Website](https://bnishit.github.io/machogs/)
+## Command contract
+
+| Command | Reads or acts | Contract |
+|---|---|---|
+| `machogs` | reads | Plain report. Exit 0 clean, 10 findings. |
+| `machogs --json --sessions` | reads | One JSON object; includes protected sessions. |
+| `machogs --check` | reads | Shows why automation processes are protected. |
+| `machogs fix` | acts after prompts | Interactive, one finding group at a time. |
+| `machogs kill --json` | acts | No prompt; use only after explicit consent. |
+| `machogs kill --json --dupes` | acts | Also closes agreed duplicate helpers. |
+| `machogs blame` | reads | Local scoreboard built from successful-close log. |
+| `machogs brag` | reads | Copyable cumulative receipt. |
+| `machogs disk --json` | reads | Storage items with `safe`, `check`, or `yours`. |
+| `machogs disk clear <path>` | deletes | Clears one exact allow-listed safe cache or Trash path. Ask first; exit 3 means refused or missing. |
+| `machogs ports --json` | reads | Listening ports, owners, protections, and notes. |
+| `machogs port <n>` | reads | One port. |
+| `machogs port <n> kill` | acts | Ask first; refuses system, protected, and noted services. |
+
+Do not use `--json` for a port kill: JSON port mode reports the listener and
+does not execute the kill path.
+
+## Process JSON
+
+`machogs --json --sessions` prints exactly one object:
+
+    {
+      "mode": "report",
+      "host": {
+        "load": 4.27,
+        "cores": 10,
+        "swap_used_mb": 13973.88,
+        "swap_total_mb": 14336.00,
+        "swap_pct": 97,
+        "uptime_days": 20
+      },
+      "summary": {"reapable": 0, "killed": 0},
+      "findings": [{
+        "pid": 57377,
+        "section": "2b",
+        "action": "needs-dupes-flag",
+        "cpu": 0.0,
+        "cpu_seconds": 4,
+        "age": "01:09:11",
+        "owner": "ChatGPT",
+        "what": "browser-control helper",
+        "detail": "duplicate playwright-mcp under ChatGPT",
+        "story": "ChatGPT quietly started 11 copies of the same browser-control helper. All idle, none cleaned up, oldest sitting there 1 hour."
+      }]
+    }
+
+Actions: `reapable`, `needs-dupes-flag`, `protected`, `never-killed`,
+and `killed`.
+
+Sections: `1` orphaned runaway; `1b` stuck spinner; `2` leaked MCP
+server; `2b` duplicate MCP servers; `3` stranded headless browser; `4`
+zombie app helper; `5` live Claude Code session.
+
+Important: `summary.reapable` reflects the flags used for that run. Duplicate
+findings are not counted unless `--dupes` is present. Always read `findings`.
+
+## Native app status
+
+The repository contains a real SwiftUI development app with a normal window,
+menu-bar experience, Now, Ports, Storage, Receipts, and Settings. It is not a
+release artifact. Do not tell a user to download it, and do not claim it is
+signed, notarized, or safe for public distribution without direct release
+evidence. Verified native behavior: menu-bar and notification actions open
+Review only; process and port actions use stable-identity engine planning and
+an execution-time recheck; stale targets never expand to other findings. The
+app targets macOS 13 or later and does not require an admin password, Full Disk
+Access, or Accessibility access.
+
+## Canonical sources
+
+- Repository: https://github.com/bnishit/machogs
+- Website: https://bnishit.github.io/machogs/
+- Agent safety contract: https://raw.githubusercontent.com/bnishit/machogs/main/AGENTS.md
+- Human guide: https://raw.githubusercontent.com/bnishit/machogs/main/README.md
+- CLI source: https://raw.githubusercontent.com/bnishit/machogs/main/machogs

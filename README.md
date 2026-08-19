@@ -1,8 +1,17 @@
 # machogs 🐷
 
-**Your Mac is slow, hot, and loud. This tells you what is doing it, in plain English.**
+**Finds the hog. Names the app. Closes nothing without you.**
 
 **[Website](https://bnishit.github.io/machogs/)** · free · one bash file · zero dependencies · MIT
+
+> [!IMPORTANT]
+> A native Mac app is in development, with a normal window, menu-bar experience,
+> Ports, Storage, Receipts, and Settings. Its rebuilt safety path uses a named
+> review, stable process identity, and an execution-time protection check;
+> menu-bar and notification actions only open Review. It requires macOS 13 or
+> later and no admin password, Full Disk Access, or Accessibility access. It is
+> not available as a signed or notarized download yet. The command-line tool
+> documented below is the product you can install today.
 
 ```
 $ machogs
@@ -41,6 +50,7 @@ name. In Activity Monitor it shows up as `bun`, or `node`, or `Helper (Renderer)
 Those names tell you nothing, so most people scroll past and reboot instead.
 
 `machogs` finds it and tells you what it actually is and which app left it there.
+The first check is report-only. It changes nothing.
 
 ## Why is my MacBook so hot?
 
@@ -89,17 +99,18 @@ up correctly most of the time, and the failures are quiet. But the result is a
 new kind of slow computer: not old, not full, not broken — just quietly busy
 with work nobody asked for.
 
-Every "clean your Mac" tool ever written deletes caches to free disk space. That
-solves a problem from 2010. `machogs` deletes nothing. It looks at what is
-*running*, and it knows the names of the AI tools that leave things behind.
+Every "clean your Mac" tool ever written starts with deleting caches. That
+solves a problem from 2010. The default `machogs` report changes nothing. It
+looks at what is *running*, and it knows the names of the AI tools that leave
+things behind.
 
 ---
 
 ## Why is my Mac storage full?
 
-The CPU has hogs; the disk has dead weight. `machogs disk` is the storage
-X-ray — same promise as everything else here: find it, explain it in plain
-English, and **delete nothing**. You decide; it points.
+The CPU has hogs; the disk has dead weight. `machogs disk` is the read-only
+storage X-ray: it measures the usual suspects and separates rebuildable caches
+from locations that need judgment.
 
 ```
 $ machogs disk
@@ -111,13 +122,18 @@ $ machogs disk
   🛠️ Old iPhone debug files — 6.5 GB. Check first: dead weight per old iPhone.
   ⬇️ Downloads — 4.8 GB. Your call: You know what is in there.
 
-machogs deletes nothing. It shows you where the weight is; you decide.
+machogs disk deletes nothing. It shows you where the weight is; you decide.
 ```
 
 It checks the usual junk spots — Trash, app caches, Xcode build junk, old
 iPhone backups, Docker's disk image, simulators, npm cache, Downloads — and
 only mentions what is actually chunky (0.5 GB+). If the junk spots are clean,
 it says the honest thing: the space is going to your real files.
+
+Clearing is a separate command and needs the exact path. `machogs disk clear
+<path>` refuses anything outside its fixed list of rebuildable caches and the
+Trash. It can delete cache contents, so inspect the report and ask before using
+it. Personal, check-first, and “your call” locations never qualify.
 
 ---
 
@@ -143,7 +159,7 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ---
 
-## Install
+## Install the available CLI
 
 ```sh
 brew install bnishit/tap/machogs
@@ -163,7 +179,8 @@ Or skip all of this and paste one line to any AI that has a terminal —
 Claude Code, Codex, Cursor:
 
 > Install machogs from github.com/bnishit/machogs, read its AGENTS.md, then
-> tell me what is hogging my Mac. Don't close anything without asking.
+> tell me what is hogging my Mac. Show me the findings and ask before closing
+> a process, freeing a port, or clearing a cache.
 
 ## Use
 
@@ -172,9 +189,10 @@ machogs              # plain answer. Closes nothing.
 machogs fix          # go through them one at a time, asking before each
 machogs blame        # scoreboard: which app leaves the most junk behind
 machogs brag         # a shareable card of what your Mac has been wasting
-machogs disk         # where your storage went. Deletes nothing.
+machogs disk         # read-only storage report
+machogs disk clear <path> # clear one engine-approved safe cache, after consent
 machogs ports        # every port in use and who is squatting it
-machogs port 3000    # who holds port 3000; add `kill` to free it
+machogs port 3000    # read-only port report; add `kill` only after consent
 machogs --details    # the technical report, by category
 machogs --json       # machine-readable, for agents
 machogs --check      # audit the safety rules, close nothing
