@@ -6,16 +6,21 @@ import SwiftUI
 @main
 struct MachogsApp: App {
     @StateObject private var model: AppModel
-    @StateObject private var settings = AppSettings()
+    @StateObject private var settings: AppSettings
     @StateObject private var router = AppRouter()
+    private let successSound: SuccessSoundCoordinator
 
     init() {
         let service: any MachogsServing = MachogsClient()
-        _model = StateObject(wrappedValue: AppModel(service: service))
+        let model = AppModel(service: service)
+        let settings = AppSettings()
+        _model = StateObject(wrappedValue: model)
+        _settings = StateObject(wrappedValue: settings)
+        successSound = SuccessSoundCoordinator(model: model, settings: settings)
     }
 
     var body: some Scene {
-        WindowGroup("Machogs", id: "main") {
+        Window("Machogs", id: "main") {
             Group {
                 if settings.onboardingComplete {
                     MainWindow(model: model, settings: settings, router: router)
@@ -31,10 +36,6 @@ struct MachogsApp: App {
             .onChange(of: model.watchdogEvent) { event in
                 guard settings.onboardingComplete, settings.shoulderTaps, let event else { return }
                 NotificationCoordinator.shared.post(event, sound: settings.soundOn)
-            }
-            .onReceive(model.$receipt.dropFirst()) { receipt in
-                guard settings.soundOn, receipt?.isSuccess == true else { return }
-                NSSound(named: NSSound.Name("Glass"))?.play()
             }
         }
         MenuBarExtra {
@@ -58,5 +59,27 @@ struct MachogsApp: App {
                 return ProcessTarget(pid: pid, identity: parts[1])
             } ?? []
         if !targets.isEmpty { Task { await model.requestProcessTargets(targets) } }
+    }
+}
+
+@MainActor
+private final class SuccessSoundCoordinator {
+    private var receiptCancellable: AnyCancellable?
+
+    init(model: AppModel, settings: AppSettings) {
+        receiptCancellable = model.$receipt
+            .dropFirst()
+            .compactMap { $0 }
+            .filter { $0.isSuccess }
+            .sink { [weak settings] _ in
+                guard settings?.soundOn == true else { return }
+                MachogsSound.playSuccess()
+            }
+    }
+}
+
+enum MachogsSound {
+    static func playSuccess() {
+        if NSSound(named: NSSound.Name("Glass"))?.play() != true { NSSound.beep() }
     }
 }

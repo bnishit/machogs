@@ -81,7 +81,7 @@ For the first public app release:
 
 - 100% of process and port actions are revalidated by the engine after the user asks to review and before an action runs.
 - 0 native action paths call a process signal directly.
-- 100% of system notifications and island alerts open review; none execute a close.
+- 100% of system notifications and menu-popover actions open review; none execute a close.
 - 100% of first launches explain the promise before asking for notification or start-at-login access.
 - 100% of successful actions report only measured results returned by the engine.
 - All clean, finding, stale, error, restart, protected, partial-success, and already-gone states have explicit UI acceptance tests.
@@ -220,30 +220,43 @@ If a future feature needs broader access, it requires a new product review. Do n
 ### 7.4 Menu bar and alerts
 
 **User** — a person working in any app.
-**Entry point** — pig, fire, or camera icon in the menu bar.
+**Entry point** — one compact pig icon in the menu bar.
 **Case** — manual glance or watchdog catch.
 **What** — a fast health summary and a route to review.
-**How** — click icon → read one verdict → Show me, Ports, or Open MacHogs.
+**How** — click icon → choose Hogs, Storage, or Ports → inspect → open one review in MacHogs.
 **Why** — awareness without taking focus or asking for housekeeping.
-**Limits** — no process close, port kill, cache clear, or restart runs from a notification or island.
+**Limits** — no process close, port kill, cache clear, or restart runs from a notification or popover.
 
 Menu-bar icon contract:
 
-- 🐷 means no hot closable finding in the latest fresh scan.
-- 🔥 means a hot closable finding exists.
-- 📸 means the watchdog caught a change the person has not reviewed.
-- An error must not masquerade as 🐷. Show an error badge/state and “Last checked” time.
+- The app owns one compact 18-point status item so it takes the least practical
+  room beside a MacBook notch. It must not create a second icon for alerts,
+  Ports, or Storage.
+- 🐷 is always the base icon. A small red dot means hot closable work; orange
+  means the latest Hogs refresh failed.
+- macOS owns status-item placement. MacHogs does not draw a custom overlay over
+  the menu bar or position a window against the full screen frame.
+- An error must not masquerade as a fresh healthy result. Show a scoped error
+  state and the time of the last successful check.
 
-The popover contains:
+The 380-point popover is one bounded workspace with three tabs:
 
-- one current verdict;
-- a short list of active findings;
-- a **Show me** button per finding;
-- restart warning when memory pressure is above the engine threshold;
-- doorways to Overview and Ports;
-- Settings and Quit.
+- **Hogs** renders the cached two-minute process check immediately, groups by
+  culprit and story, and shows no more than four groups before a full-app route.
+- **Storage** runs only when first opened or manually refreshed. Its tab shows a
+  measured safe-cache amount only after a successful check.
+- **Ports** runs only when opened or manually refreshed. It supports port-number
+  search, shows closable, protected, and macOS-managed rows, and puts one simple
+  **Free…** button on a closable row.
+- A fixed footer keeps **Open full app**, the successful check time, Settings,
+  and Quit visible while results scroll above it.
+- Hogs, Storage, and Ports keep separate loading, stale, empty, and error states.
+  A failed Ports refresh does not make Hogs look broken.
 
-The island is a non-activating tap on the shoulder. It may say “Caught the hog,” “Session over, mess left,” or “Clone army forming.” Its primary action is **Review**, never **Close it**. Dismiss snoozes only according to the watchdog contract; it does not mark a finding safe or resolved.
+The popover never performs an action. **Free…**, process review, and cache review
+open the one normal app window, revalidate where the engine supports it, and
+show the existing confirmation. Repeated clicks focus that one window; they do
+not create more windows or confirmations.
 
 System notifications use one foreground action: **Show me**. Clicking the body or action opens the same review state. No notification action carries consent to stop a process.
 
@@ -262,12 +275,16 @@ Watchdog alerts remain limited to facts the engine supports:
 
 - Every alert route lands on the exact live group that caused it, or says “Already gone.”
 - Review never falls back to closing every current finding when its original target is stale.
-- The island can be dismissed without action.
-- The island does not steal keyboard focus.
-- Notification denial leaves manual scans and the island usable.
+- The popover has one status item, stays below the system menu bar, and never
+  draws content across the notch.
+- Notification denial leaves manual scans and the popover usable.
 - The normal watchdog cadence is two minutes and does not silently become a
   one-minute poll.
-- Reduced Motion replaces sliding and camera-flash motion with a short fade.
+- Hogs is the only tab that refreshes in the background. Storage and Ports do
+  no work until the user opens or refreshes them.
+- Tab changes use a short crossfade. Reduced Motion removes that transition.
+- Ports search, every tab, refresh, full-app route, and the fixed footer are
+  keyboard and VoiceOver reachable.
 
 ### 7.5 Normal window
 
@@ -289,14 +306,14 @@ Keep these pages:
 | Receipts | Measured result history and share loop | Copy share card |
 | Settings | Watchdog, login, sound, trust facts | Change reversible preferences |
 
-Ports and Storage remain first-class. They answer different user jobs, use real engine modes, and prevent MacHogs from being a one-warning novelty. They must not crowd the menu bar.
+Ports and Storage remain first-class. They answer different user jobs, use real engine modes, and prevent MacHogs from being a one-warning novelty. In the menu bar they share the same bounded popover and never add status icons.
 
 The default window opens on Overview. A deep link may open a specific page. Window close hides the window while the menu-bar app continues if enabled; Quit ends the app.
 
 ### 7.6 Safe consent and action contract
 
 **User** — a person considering a process, port, cache, or restart action.
-**Entry point** — Review from the app, island, notification, or alert window.
+**Entry point** — Review from the app, menu popover, notification, or alert window.
 **Case** — the latest scan says something may be acted on.
 **What** — a named confirmation based on a fresh engine plan.
 **How** — request review → engine revalidates → sheet shows current targets → confirm → engine acts → app renders result.
@@ -402,8 +419,10 @@ The desired emotion is calm confidence with one odd little pig, not a casino cle
   unrelated mascot.
 - Use system type, standard traffic lights, real sidebars, keyboard focus, and macOS sheets.
 - Buttons respond on press. Routine motion is critically damped and short.
-- Bounce belongs only to the physical island arrival or mascot, never a warning sheet.
+- Bounce belongs only to a one-shot mascot reaction, never a warning sheet.
 - Confetti and sound follow a real success, not scan findings, copy, cancel, or retry.
+- Success sound is observed for the life of the menu-bar app, not for the life
+  of a normal window. Settings provides a harmless **Test sound** button.
 - Respect Reduce Motion, Reduce Transparency, Increase Contrast, and VoiceOver.
 - Emoji supports the voice but never carries the only meaning.
 - The camera flash effect is removed under Reduce Motion and should be reduced in brightness for everyone.
@@ -508,7 +527,7 @@ stapled, validated on clean Macs, uploaded, or published.
 | Settled CPU | Rebuilt menu-only test app measured 0.0% after scan settlement; the earlier repeating mascot transaction measured near 11% | Repeat on the integrated candidate and both supported CPU architectures |
 | Character motion | Repeating mascot transaction replaced by one-shot spring reactions | Preserve one-shot behavior through integration and accessibility review |
 | Accessibility | Reduce Motion behavior implemented | Complete VoiceOver, contrast, and transparency passes |
-| Automated verification | Full Xcode build plus 13/13 safety/state/watchdog/receipt tests; plist, shell syntax, and diff whitespace checks pass | Run the same suite after integration and on the exact packaged candidate |
+| Automated verification | Full Xcode build plus 18/18 safety/state/watchdog/receipt/menu-review tests; plist, shell syntax, and diff whitespace checks pass | Run the same suite after integration and on the exact packaged candidate |
 
 The app must expose its current version and signing state in Settings. An ad-hoc build says **Development build — not ready to share**. A Developer ID signature may say **Developer ID signed**, but must not imply notarization by signature alone.
 

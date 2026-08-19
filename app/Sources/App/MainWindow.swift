@@ -535,8 +535,13 @@ struct SettingsPage: View {
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
-                Toggle("Play sounds", isOn: $soundOn)
-                    .onChange(of: soundOn, perform: settings.setSound)
+                HStack {
+                    Toggle("Play sounds", isOn: $soundOn)
+                        .onChange(of: soundOn, perform: settings.setSound)
+                    Spacer()
+                    Button("Test sound") { MachogsSound.playSuccess() }
+                        .disabled(!soundOn)
+                }
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
             }
             Section("Safety") {

@@ -168,6 +168,86 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertEqual(model.receipt?.message, "Cleared App Caches and recovered 1.5 GB.")
     }
 
+    @MainActor
+    func testFailedStorageRefreshKeepsTheLastMeasuredAnswer() async throws {
+        let report = try fixture([])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        fake.diskReport = try diskFixture(freedMB: 512).report
+        let model = AppModel(service: fake)
+
+        await model.loadDisk()
+        fake.diskError = MachogsClientError.invalidResponse
+        await model.loadDisk()
+
+        XCTAssertEqual(model.diskReport?.items.first?.label, "App Caches")
+        XCTAssertNotNil(model.diskError)
+        XCTAssertNotNil(model.lastSuccessfulDiskScan)
+        XCTAssertFalse(model.isLoadingDisk)
+    }
+
+    @MainActor
+    func testPortsLoadKeepsProtectedAndClosableRowsSeparate() async throws {
+        let report = try fixture([])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        fake.portsReport = try portsFixture()
+        let model = AppModel(service: fake)
+
+        await model.loadPorts()
+
+        XCTAssertEqual(model.portsReport?.ports.filter(\.isClosable).map(\.port), [3000])
+        XCTAssertEqual(model.portsReport?.ports.filter(\.protected).map(\.port), [4000])
+        XCTAssertNotNil(model.lastSuccessfulPortsScan)
+        XCTAssertFalse(model.isLoadingPorts)
+    }
+
+    @MainActor
+    func testPortFreeRequestRevalidatesAndOnlyOpensReview() async throws {
+        let report = try fixture([])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        fake.portsReport = try portsFixture()
+        let model = AppModel(service: fake)
+        let item = fake.portsReport!.ports[0]
+
+        await model.requestPortReview(item)
+
+        XCTAssertEqual(fake.inspectedPorts, [3000])
+        XCTAssertEqual(model.pendingReview?.title, "Free port 3000?")
+        XCTAssertTrue(fake.closedPortTargets.isEmpty)
+    }
+
+    @MainActor
+    func testRapidRepeatedPortFreeRequestsCreateOneReview() async throws {
+        let report = try fixture([])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        fake.portsReport = try portsFixture()
+        fake.portInspectionDelayNanoseconds = 20_000_000
+        let model = AppModel(service: fake)
+        let item = fake.portsReport!.ports[0]
+
+        async let first: Void = model.requestPortReview(item)
+        async let second: Void = model.requestPortReview(item)
+        _ = await (first, second)
+
+        XCTAssertEqual(fake.inspectedPorts, [3000])
+        XCTAssertEqual(model.pendingReview?.title, "Free port 3000?")
+        XCTAssertTrue(fake.closedPortTargets.isEmpty)
+    }
+
+    @MainActor
+    func testChangedPortIdentityProducesNoReviewOrClose() async throws {
+        let report = try fixture([])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        let original = try portsFixture(identity: "old").ports[0]
+        fake.portsReport = try portsFixture(identity: "new")
+        let model = AppModel(service: fake)
+
+        await model.requestPortReview(original)
+
+        XCTAssertNil(model.pendingReview)
+        XCTAssertEqual(model.receipt?.message, "The listener changed after the scan. Nothing was closed.")
+        XCTAssertTrue(fake.closedPortTargets.isEmpty)
+    }
+
     private func fixture(_ findings: [String], mode: String = "report", killed: Int = 0) throws -> EngineReport {
         let data = """
         {"mode":"\(mode)","host":{"load":1.5,"cores":8,"swap_used_mb":10,"swap_total_mb":100,"swap_pct":10,"uptime_days":2},"summary":{"reapable":\(findings.count),"killed":\(killed)},"findings":[\(findings.joined(separator: ","))]}
@@ -195,6 +275,16 @@ final class MachogsCoreTests: XCTestCase {
         let result = try JSONDecoder().decode(DiskClearResult.self, from: resultData)
         return (report, report.items[0], result)
     }
+
+    private func portsFixture(identity: String = "a") throws -> PortsReport {
+        let data = """
+        {"mode":"ports","ports":[
+          {"port":3000,"pid":10,"identity":"\(identity)","process":"node","owner":"Vite","cwd":"/tmp/project","age":"01:00:00","system":false,"protected":false,"note":"","action":null},
+          {"port":4000,"pid":11,"identity":"b","process":"node","owner":"Claude Code","cwd":"/tmp/live","age":"00:10:00","system":false,"protected":true,"note":"Live session","action":null}
+        ]}
+        """.data(using: .utf8)!
+        return try JSONDecoder().decode(PortsReport.self, from: data)
+    }
 }
 
 private final class FakeService: MachogsServing, @unchecked Sendable {
@@ -203,7 +293,13 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     var closeReport: EngineReport
     var scanError: Error?
     var diskReport: DiskReport?
+    var diskError: Error?
     var diskClearResult: DiskClearResult?
+    var portsReport: PortsReport?
+    var portsError: Error?
+    var inspectedPorts: [Int] = []
+    var closedPortTargets: [PortTarget] = []
+    var portInspectionDelayNanoseconds: UInt64 = 0
     var planTargets: [ProcessTarget] = []
     var closeTargets: [ProcessTarget] = []
 
@@ -223,10 +319,26 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     func closeReviewed(targets: [ProcessTarget]) async throws -> EngineReport {
         closeTargets = targets; return closeReport
     }
-    func inspectPorts() async throws -> PortsReport { throw MachogsClientError.invalidResponse }
-    func inspectPort(_ port: Int) async throws -> PortsReport { throw MachogsClientError.invalidResponse }
-    func closePort(_ target: PortTarget) async throws -> PortsReport { throw MachogsClientError.invalidResponse }
+    func inspectPorts() async throws -> PortsReport {
+        if let portsError { throw portsError }
+        guard let portsReport else { throw MachogsClientError.invalidResponse }
+        return portsReport
+    }
+    func inspectPort(_ port: Int) async throws -> PortsReport {
+        inspectedPorts.append(port)
+        if portInspectionDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: portInspectionDelayNanoseconds)
+        }
+        guard let portsReport else { throw MachogsClientError.invalidResponse }
+        return portsReport
+    }
+    func closePort(_ target: PortTarget) async throws -> PortsReport {
+        closedPortTargets.append(target)
+        guard let portsReport else { throw MachogsClientError.invalidResponse }
+        return portsReport
+    }
     func inspectDisk() async throws -> DiskReport {
+        if let diskError { throw diskError }
         guard let diskReport else { throw MachogsClientError.invalidResponse }
         return diskReport
     }

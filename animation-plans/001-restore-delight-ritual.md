@@ -89,7 +89,7 @@ looping motion:
 
 - **Mechanical**: run
   `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` in
-  `app/`; all 13 tests pass. Run `git diff --check` and confirm no direct
+  `app/`; all 18 tests pass. Run `git diff --check` and confirm no direct
   process signals exist in `app/Sources`.
 - **Feel check**:
   - Fresh launch shows one authored welcome, visible progress, and a static

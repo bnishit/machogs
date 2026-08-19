@@ -80,8 +80,12 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var receipt: CleanupReceipt?
     @Published public private(set) var portsReport: PortsReport?
     @Published public private(set) var portsError: String?
+    @Published public private(set) var isLoadingPorts = false
+    @Published public private(set) var lastSuccessfulPortsScan: Date?
     @Published public private(set) var diskReport: DiskReport?
     @Published public private(set) var diskError: String?
+    @Published public private(set) var isLoadingDisk = false
+    @Published public private(set) var lastSuccessfulDiskScan: Date?
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
     private let service: any MachogsServing
@@ -125,14 +129,26 @@ public final class AppModel: ObservableObject {
     }
 
     public func loadPorts() async {
+        guard !isLoadingPorts else { return }
+        isLoadingPorts = true
         portsError = nil
-        do { portsReport = try await service.inspectPorts() }
+        defer { isLoadingPorts = false }
+        do {
+            portsReport = try await service.inspectPorts()
+            lastSuccessfulPortsScan = Date()
+        }
         catch { portsError = error.localizedDescription }
     }
 
     public func loadDisk() async {
+        guard !isLoadingDisk else { return }
+        isLoadingDisk = true
         diskError = nil
-        do { diskReport = try await service.inspectDisk() }
+        defer { isLoadingDisk = false }
+        do {
+            diskReport = try await service.inspectDisk()
+            lastSuccessfulDiskScan = Date()
+        }
         catch { diskError = error.localizedDescription }
     }
 
