@@ -3,15 +3,25 @@
 > machogs is an open-source macOS utility for diagnosing stuck, leaked, and
 > abandoned background work. It names the app responsible, explains each finding
 > in plain English, and is read-only by default. A native Mac app is in
-> development but is not available as a signed or notarized download. The
-> single-file Bash CLI is the available product today.
+> available as a signed and notarized universal download for macOS 13 or later.
+> The single-file Bash CLI remains available for terminal and agent workflows.
+
+## Install the native Mac app
+
+Download Machogs 1.2.0:
+
+    https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg
+
+Open the DMG and drag Machogs to Applications. The app supports Apple silicon
+and Intel. Its first scan is read-only. Menu-bar and notification actions only
+open a fresh review; they never close anything directly.
 
 Use machogs when the user says their Mac is slow, hot, loud, losing battery,
 out of storage, or has a port already in use. It is especially useful for
 leftovers from AI tools such as ChatGPT, Claude Code, Codex, Cursor, and
 browser-control plugins.
 
-## Install the available CLI
+## Install the CLI
 
 Homebrew:
 
@@ -106,15 +116,14 @@ findings are not counted unless `--dupes` is present. Always read `findings`.
 
 ## Native app status
 
-The repository contains a real SwiftUI development app with a normal window,
-menu-bar experience, Now, Ports, Storage, Receipts, and Settings. It is not a
-release artifact. Do not tell a user to download it, and do not claim it is
-signed, notarized, or safe for public distribution without direct release
-evidence. Verified native behavior: menu-bar and notification actions open
-Review only; process and port actions use stable-identity engine planning and
-an execution-time recheck; stale targets never expand to other findings. The
-app targets macOS 13 or later and does not require an admin password, Full Disk
-Access, or Accessibility access.
+Machogs 1.2.0 is the public native app release. Its Developer ID-signed,
+Apple-notarized universal DMG is linked above. The app has a normal window,
+menu-bar Hogs, Storage and Ports views, Receipts, and Settings. Verified native
+behavior: menu-bar and notification actions open Review only; process and port
+actions use stable-identity engine planning and an execution-time recheck;
+stale targets never expand to other findings. The app targets macOS 13 or later
+and does not require an admin password, Full Disk Access, or Accessibility
+access.
 
 ## Canonical sources
 

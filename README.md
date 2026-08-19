@@ -2,16 +2,15 @@
 
 **Finds the hog. Names the app. Closes nothing without you.**
 
-**[Website](https://bnishit.github.io/machogs/)** · free · one bash file · zero dependencies · MIT
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 > [!IMPORTANT]
-> A native Mac app is in development, with a normal window, menu-bar experience,
-> Ports, Storage, Receipts, and Settings. Its rebuilt safety path uses a named
-> review, stable process identity, and an execution-time protection check;
-> menu-bar and notification actions only open Review. It requires macOS 13 or
-> later and no admin password, Full Disk Access, or Accessibility access. It is
-> not available as a signed or notarized download yet. The command-line tool
-> documented below is the product you can install today.
+> The native Mac app is available as a signed and notarized universal download.
+> It includes a normal window, menu-bar Hogs, Storage and Ports views, Receipts,
+> and Settings. Every action has a named review, stable identity check, and a
+> fresh protection check; menu-bar and notification actions only open Review.
+> It needs macOS 13 or later and no admin password, Full Disk Access, or
+> Accessibility access. The open-source CLI remains available below.
 
 ```
 $ machogs
@@ -159,7 +158,16 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ---
 
-## Install the available CLI
+## Install the Mac app
+
+[Download Machogs 1.2.0](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg), open the DMG, and drag Machogs to Applications.
+
+The app is signed with Developer ID, notarized by Apple, and includes both
+Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
+Start at Login, quit Machogs, then move it from Applications to Trash. Local
+receipts and preferences remain unless you remove them separately.
+
+## Install the CLI
 
 ```sh
 brew install bnishit/tap/machogs
