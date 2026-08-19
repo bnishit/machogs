@@ -17,6 +17,7 @@ struct MachogsApp: App {
         _model = StateObject(wrappedValue: model)
         _settings = StateObject(wrappedValue: settings)
         successSound = SuccessSoundCoordinator(model: model, settings: settings)
+        MachogsSound.pop(enabled: settings.soundOn)
     }
 
     var body: some Scene {
@@ -73,13 +74,7 @@ private final class SuccessSoundCoordinator {
             .filter { $0.isSuccess }
             .sink { [weak settings] _ in
                 guard settings?.soundOn == true else { return }
-                MachogsSound.playSuccess()
+                MachogsSound.pop()
             }
-    }
-}
-
-enum MachogsSound {
-    static func playSuccess() {
-        if NSSound(named: NSSound.Name("Glass"))?.play() != true { NSSound.beep() }
     }
 }

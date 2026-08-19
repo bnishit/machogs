@@ -12,6 +12,7 @@ struct OnboardingView: View {
     @State private var startAtLogin = true
     @State private var finishing = false
     @State private var showSightDetails = false
+    @State private var appeared = false
 
     var body: some View {
         ZStack {
@@ -26,11 +27,16 @@ struct OnboardingView: View {
             }
             .padding(42).id(scene)
             .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
+            .joyReveal(appeared, delay: 0)
         }
         .overlay(alignment: .top) { sceneIndicator.padding(.top, 22) }
         .frame(minWidth: 720, idealWidth: 760, minHeight: 540, idealHeight: 580)
         .background(.regularMaterial)
         .background(WindowSizer(width: 760, height: 580))
+        .onAppear {
+            MachogsSound.pop(enabled: settings.soundOn)
+            appeared = true
+        }
     }
 
     private var welcome: some View {
@@ -48,7 +54,9 @@ struct OnboardingView: View {
                         Text("Only facts about running programs that macOS already shows. Not your files, messages, passwords, tabs, or browser history.")
                             .font(.callout).padding(18).frame(width: 340)
                     }
-                Button("Sniff my Mac") { sniff() }
+                Button { sniff() } label: {
+                    Label("Sniff my Mac", systemImage: "sparkles")
+                }
                     .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
                 Label("This first check only looks. Nothing can close.", systemImage: "hand.raised.fill")
                     .font(.callout.weight(.semibold)).foregroundStyle(.secondary)
@@ -91,7 +99,9 @@ struct OnboardingView: View {
                 if model.scanError != nil {
                     Button("Try again") { sniff(stayHere: true) }.buttonStyle(.borderedProminent).controlSize(.large)
                 } else {
-                    Button("Continue") { move(to: 2) }
+                    Button { move(to: 2) } label: {
+                        Label("Continue", systemImage: "arrow.right.circle.fill")
+                    }
                         .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
                 }
             }
@@ -118,7 +128,9 @@ struct OnboardingView: View {
                 HStack {
                     Button("Back") { move(to: 1) }.buttonStyle(.borderless)
                     Spacer()
-                    Button(finishing ? "Opening…" : finishLabel) { finish() }
+                    Button { finish() } label: {
+                        Label(finishing ? "Opening…" : finishLabel, systemImage: "sparkles")
+                    }
                         .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction).disabled(finishing)
                 }
             }.frame(maxWidth: 450, alignment: .leading)

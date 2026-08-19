@@ -40,10 +40,11 @@ looping motion:
 2. A real successful close (`receipt.closedCount > 0`) renders a large receipt
    panel headed **Caught in 4K.** with a one-shot pleased pig, the measured engine
    message, **View receipt**, and **Copy the evidence** actions.
-3. Non-success results remain calm, use no sparkles and no sound.
-4. Play one system success sound only when a new successful receipt appears and
-   only when Settings → Play sounds is on. Never sound on scan, retry, protected,
-   cancelled, already-gone, or failed states.
+3. Non-success results remain calm and use no confetti.
+4. Restore Fable's macOS **Pop** sound plus generic haptic when onboarding, the
+   normal window, or the menu popover opens, and when a new successful receipt
+   appears. Respect Settings → Play sounds. Never sound on a background scan,
+   protected result, already-gone result, cancellation, or evidence copy.
 5. Restore a three-scene capsule progress indicator to onboarding. The scene
    swap remains a one-shot spring with response `0.4` and damping fraction `1`.
 6. Restore a small `sniff…` bubble beside the pig on the welcome scene. It is
@@ -70,8 +71,9 @@ looping motion:
    `closedCount > 0`. Keep a compact calm result for zero-close outcomes.
 3. Add **View receipt** and an explicit engine-backed **Copy the evidence**.
    Copying makes no network request and shows `Copied — paste it anywhere`.
-4. In `MachogsApp.swift`, observe `model.receipt`. If and only if its new value
-   has `closedCount > 0` and `settings.soundOn`, play one subtle system sound.
+4. Keep one app-lifetime receipt observer for success sound. Play Fable's Pop
+   sound from each user-opened app surface and expose **Test pig pop** in
+   Settings. Never tie sound lifetime to a normal window.
 5. In `OnboardingView.swift`, overlay a three-capsule scene indicator and add
    the static welcome `sniff…` bubble. Preserve real read-only scanning.
 6. Do not change engine action code, safety checks, process targeting, release
@@ -81,7 +83,8 @@ looping motion:
 
 - Do NOT add dependencies or media assets.
 - Do NOT add looping animation or artificial scan delay.
-- Do NOT play sound on any state except a confirmed successful action.
+- Do NOT play sound from background scans, warnings, protected/already-gone
+  results, cancellation, or evidence copy.
 - Do NOT rename or weaken the final close confirmation.
 - Do NOT edit website/discovery files.
 

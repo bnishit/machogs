@@ -37,19 +37,26 @@ struct MainWindow: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var router: AppRouter
+    @State private var celebrationTrigger = 0
+    @State private var appeared = false
 
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 18) {
                 SidebarSection(title: "MAC", pages: [.now, .storage], router: router, badge: badge)
+                    .joyReveal(appeared, delay: 0)
                 SidebarSection(title: "TOOLS", pages: [.ports], router: router, badge: badge)
+                    .joyReveal(appeared, delay: 0.05)
                 SidebarSection(title: "YOU", pages: [.receipts, .settings], router: router, badge: badge)
+                    .joyReveal(appeared, delay: 0.1)
                 Spacer()
                 VStack(spacing: 5) {
-                    PigMascot(mood: .pleased, size: 34)
+                    PigMascot(mood: .pleased, size: 44)
                     Text("Apps leave messes. The pig finds them.")
                         .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
-                }.frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
+                .joyReveal(appeared, delay: 0.15)
             }
             .padding(12)
             .background(.ultraThinMaterial)
@@ -77,15 +84,21 @@ struct MainWindow: View {
             .navigationTitle(router.page.title)
         }
         .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
+        .overlay { ConfettiBurst(trigger: celebrationTrigger) }
         .sheet(item: reviewBinding) { review in
             ReviewSheet(review: review, model: model)
         }
         .onAppear {
+            MachogsSound.pop(enabled: settings.soundOn)
+            appeared = true
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow, window.contentView?.frame.width ?? 0 < 820 else { return }
                 window.setContentSize(NSSize(width: 900, height: 680))
                 window.center()
             }
+        }
+        .onChange(of: model.receipt) { receipt in
+            if receipt?.isSuccess == true { celebrationTrigger += 1 }
         }
     }
 
@@ -539,7 +552,7 @@ struct SettingsPage: View {
                     Toggle("Play sounds", isOn: $soundOn)
                         .onChange(of: soundOn, perform: settings.setSound)
                     Spacer()
-                    Button("Test sound") { MachogsSound.playSuccess() }
+                    Button("Test pig pop") { MachogsSound.pop() }
                         .disabled(!soundOn)
                 }
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
@@ -668,7 +681,7 @@ struct SuccessReceipt: View {
         HStack(alignment: .center, spacing: 18) {
             PigMascot(mood: .pleased, size: 86)
             VStack(alignment: .leading, spacing: 7) {
-                Text("Caught in 4K.")
+                Label("Caught in 4K.", systemImage: "camera.fill")
                     .font(.system(size: 25, weight: .bold, design: .rounded))
                 Text(receipt.message).font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 12) {

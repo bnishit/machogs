@@ -420,9 +420,12 @@ The desired emotion is calm confidence with one odd little pig, not a casino cle
 - Use system type, standard traffic lights, real sidebars, keyboard focus, and macOS sheets.
 - Buttons respond on press. Routine motion is critically damped and short.
 - Bounce belongs only to a one-shot mascot reaction, never a warning sheet.
-- Confetti and sound follow a real success, not scan findings, copy, cancel, or retry.
+- Confetti follows a real success, not scan findings, copy, cancel, or retry.
+- Fable's macOS **Pop** sound and one generic haptic play when a person opens
+  onboarding, the normal window, or the menu popover, and after a real success.
+  They do not play on background scans or system-notification delivery.
 - Success sound is observed for the life of the menu-bar app, not for the life
-  of a normal window. Settings provides a harmless **Test sound** button.
+  of a normal window. Settings provides a harmless **Test pig pop** button.
 - Respect Reduce Motion, Reduce Transparency, Increase Contrast, and VoiceOver.
 - Emoji supports the voice but never carries the only meaning.
 - The camera flash effect is removed under Reduce Motion and should be reduced in brightness for everyone.

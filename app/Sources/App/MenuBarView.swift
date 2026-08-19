@@ -47,9 +47,9 @@ struct MenuBarView: View {
             header.padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
 
             Picker("MacHogs view", selection: $workspace) {
-                Text(hogsTabTitle).tag(MenuWorkspace.hogs)
-                Text(storageTabTitle).tag(MenuWorkspace.storage)
-                Text(portsTabTitle).tag(MenuWorkspace.ports)
+                Label(hogsTabTitle, systemImage: "sparkles").tag(MenuWorkspace.hogs)
+                Label(storageTabTitle, systemImage: "internaldrive").tag(MenuWorkspace.storage)
+                Label(portsTabTitle, systemImage: "cable.connector").tag(MenuWorkspace.ports)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -81,6 +81,7 @@ struct MenuBarView: View {
         .frame(width: 380)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: workspace)
         .onAppear {
+            MachogsSound.pop(enabled: settings.soundOn)
             if settings.onboardingComplete { model.startPolling() }
             loadWorkspaceIfNeeded(workspace)
         }
@@ -89,7 +90,7 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack(spacing: 9) {
-            PigMascot(mood: mascotMood, size: 30)
+            PigMascot(mood: mascotMood, size: 44)
             VStack(alignment: .leading, spacing: 1) {
                 Text("MacHogs").font(.headline)
                 Text(headerDetail).font(.caption).foregroundStyle(.secondary)
@@ -102,7 +103,7 @@ struct MenuBarView: View {
                     Image(systemName: "arrow.clockwise")
                 }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(PigPressStyle())
             .disabled(isRefreshing || !settings.onboardingComplete)
             .help("Check again")
             .accessibilityLabel("Check again")
@@ -114,7 +115,11 @@ struct MenuBarView: View {
             Label("Meet the pig first", systemImage: "sparkles").font(.title3.bold())
             Text("The first check only looks. Nothing can close until you review it and agree.")
                 .foregroundStyle(.secondary)
-            Button("Finish setup") { openMain(.now) }.keyboardShortcut(.defaultAction)
+            Button { openMain(.now) } label: {
+                Label("Finish setup", systemImage: "sparkles")
+            }
+            .buttonStyle(PigActionStyle(tint: .pink))
+            .keyboardShortcut(.defaultAction)
         }
         .padding(.vertical, 28)
     }
@@ -174,9 +179,11 @@ struct MenuBarView: View {
                                 Spacer()
                                 Text(item.sizeText).foregroundStyle(.secondary)
                             }
-                            Button("Review clearing in MacHogs…") {
+                            Button {
                                 openMain(.storage)
                                 model.requestDiskReview(item)
+                            } label: {
+                                Label("Review clearing in MacHogs…", systemImage: "arrow.up.forward.app")
                             }
                             .buttonStyle(.link)
                             .accessibilityLabel("Review clearing \(item.label) in MacHogs")
@@ -232,7 +239,9 @@ struct MenuBarView: View {
 
     private var footer: some View {
         HStack {
-            Button("Open full app") { openMain(pageForWorkspace) }
+            Button { openMain(pageForWorkspace) } label: {
+                Label("Open full app", systemImage: "macwindow")
+            }
             Spacer()
             Text(checkedText).font(.caption).foregroundStyle(.secondary)
             Menu {
@@ -358,7 +367,10 @@ private struct MenuFindingRow: View {
                 Text("\(group.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             Text(group.story).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-            Button("Review in MacHogs…", action: review).buttonStyle(.link)
+            Button(action: review) {
+                Label("Review in MacHogs…", systemImage: "arrow.up.forward.app")
+            }
+            .buttonStyle(.link)
                 .accessibilityLabel("Review \(group.count) items left by \(group.owner) in MacHogs")
         }
     }
@@ -383,7 +395,10 @@ private struct MenuPortRow: View {
             }
             Spacer()
             if item.isClosable {
-                Button("Free…", action: review)
+                Button(action: review) {
+                    Label("Free…", systemImage: "bolt.fill")
+                }
+                    .buttonStyle(PigActionStyle(tint: .pink))
                     .disabled(disabled)
                     .help("Open a fresh safety review in MacHogs")
                     .accessibilityLabel("Review freeing port \(item.port) from \(item.process) in MacHogs")
