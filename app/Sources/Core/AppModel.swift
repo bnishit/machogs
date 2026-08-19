@@ -19,13 +19,24 @@ public struct ActionReview: Identifiable, Equatable, Sendable {
         }
     }
 
+    public var processGroups: [FindingGroup] {
+        guard case .processes(let findings) = kind else { return [] }
+        return Dictionary(grouping: findings, by: \.stableGroupKey)
+            .values
+            .map(FindingGroup.init)
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return $0.story < $1.story
+            }
+    }
+
     public var title: String {
         switch kind {
         case .processes(let findings):
             let owners = Set(findings.map(\.owner).filter { !$0.isEmpty })
-            let owner = owners.count == 1 ? owners.first! : "reviewed apps"
-            let noun = findings.count == 1 ? "helper" : "helpers"
-            return "Close \(findings.count) \(noun) from \(owner)?"
+            let source = owners.count == 1 ? owners.first! : owners.isEmpty ? "an unknown app" : "\(owners.count) apps"
+            let noun = findings.count == 1 ? "thing" : "things"
+            return "Close \(findings.count) unused \(noun) from \(source)?"
         case .port(let item):
             return "Free port \(item.port)?"
         case .disk(let item):
@@ -35,8 +46,8 @@ public struct ActionReview: Identifiable, Equatable, Sendable {
 
     public var body: String {
         switch kind {
-        case .processes(let findings):
-            return "Machogs checked these again just now. It will stop only the \(findings.count) item\(findings.count == 1 ? "" : "s") shown below. Unsaved work inside them can be lost. Live coding sessions and macOS stay protected."
+        case .processes:
+            return "MacHogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected."
         case .port(let item):
             let location = item.cwd.isEmpty ? "" : " in \(item.cwd)"
             return "Machogs checked the listener again. This will stop \(item.process)\(location). Unsaved work inside it can be lost. macOS services and live coding sessions stay protected."
@@ -48,7 +59,7 @@ public struct ActionReview: Identifiable, Equatable, Sendable {
     public var confirmLabel: String {
         switch kind {
         case .processes(let findings):
-            return "Close \(findings.count) item\(findings.count == 1 ? "" : "s")"
+            return "Close \(findings.count) thing\(findings.count == 1 ? "" : "s")"
         case .port(let item):
             return "Stop \(item.process) and free port"
         case .disk:
@@ -127,7 +138,7 @@ public final class AppModel: ObservableObject {
 
     public func requestProcessReview(_ groups: [FindingGroup]) async {
         guard !isStale else {
-            scanError = "Check again before reviewing this finding. The last result is stale."
+            scanError = "Check again before closing anything. The last result is old."
             return
         }
         let targets = groups.flatMap(\.targets)
@@ -136,7 +147,7 @@ public final class AppModel: ObservableObject {
 
     public func requestProcessTargets(_ targets: [ProcessTarget]) async {
         guard !isStale else {
-            scanError = "Check again before reviewing this finding. The last result is stale."
+            scanError = "Check again before closing anything. The last result is old."
             return
         }
         guard !targets.isEmpty, !isReviewing else { return }
@@ -194,7 +205,6 @@ public final class AppModel: ObservableObject {
     public func confirmReview() async {
         guard let review = pendingReview, !isActing else { return }
         isActing = true
-        pendingReview = nil
         defer { isActing = false }
         do {
             switch review.kind {
@@ -217,7 +227,8 @@ public final class AppModel: ObservableObject {
                 default: message = "Machogs could not free port \(item.port). Nothing else was closed."
                 }
                 receipt = CleanupReceipt(closedCount: action == "killed" ? 1 : 0, cpuFreed: 0,
-                                         cpuSecondsAlreadyUsed: 0, message: message)
+                                         cpuSecondsAlreadyUsed: 0, message: message,
+                                         isSuccess: action == "killed", canShare: false)
                 await loadPorts()
             case .disk(let item):
                 let result = try await service.clearDisk(path: item.path)
@@ -225,12 +236,18 @@ public final class AppModel: ObservableObject {
                     ? String(format: "%.1f GB", Double(result.freedMB) / 1024)
                     : "\(result.freedMB) MB"
                 receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
-                                         message: "Cleared \(result.label) and recovered \(amount).")
+                                         message: "Cleared \(result.label) and recovered \(amount).",
+                                         isSuccess: result.freedMB > 0, canShare: false)
                 await loadDisk()
             }
         } catch {
-            scanError = error.localizedDescription
+            switch review.kind {
+            case .processes: scanError = error.localizedDescription
+            case .port: portsError = error.localizedDescription
+            case .disk: diskError = error.localizedDescription
+            }
         }
+        pendingReview = nil
     }
 
     public func makeShareCard() async throws -> String {

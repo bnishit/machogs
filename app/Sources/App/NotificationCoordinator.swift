@@ -9,7 +9,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        let review = UNNotificationAction(identifier: "REVIEW", title: "Review it", options: [.foreground])
+        let review = UNNotificationAction(identifier: "REVIEW", title: "Show me", options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "MACHOGS_REVIEW", actions: [review], intentIdentifiers: [])
         ])

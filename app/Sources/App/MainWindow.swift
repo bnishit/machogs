@@ -9,7 +9,7 @@ enum AppPage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .now: return "Now"
+        case .now: return "Overview"
         case .ports: return "Ports"
         case .storage: return "Storage"
         case .receipts: return "Receipts"
@@ -40,28 +40,41 @@ struct MainWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $router.page) {
-                ForEach(AppPage.allCases) { page in
-                    Label(page.title, systemImage: page.symbol)
-                        .tag(page)
-                        .badge(badge(for: page))
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
-            .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 18) {
+                SidebarSection(title: "MAC", pages: [.now, .storage], router: router, badge: badge)
+                SidebarSection(title: "TOOLS", pages: [.ports], router: router, badge: badge)
+                SidebarSection(title: "YOU", pages: [.receipts, .settings], router: router, badge: badge)
+                Spacer()
                 VStack(spacing: 5) {
-                    PigMascot(mood: .pleased, size: 32)
-                    Text("Finds the hog. Names the app.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                    PigMascot(mood: .pleased, size: 34)
+                    Text("Apps leave messes. The pig finds them.")
+                        .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                }.frame(maxWidth: .infinity)
             }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
         } detail: {
-            page
-                .navigationTitle(router.page.title)
+            VStack(spacing: 0) {
+                if let receipt = model.receipt {
+                    if receipt.isSuccess {
+                        SuccessReceipt(
+                            receipt: receipt,
+                            model: model,
+                            viewReceipt: { router.page = .receipts },
+                            dismiss: model.dismissReceipt
+                        )
+                        .padding(.horizontal, 18)
+                        .padding(.top, 14)
+                    } else {
+                        CalmResult(receipt: receipt, dismiss: model.dismissReceipt)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 14)
+                    }
+                }
+                page
+            }
+            .navigationTitle(router.page.title)
         }
         .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
         .sheet(item: reviewBinding) { review in
@@ -102,21 +115,55 @@ struct MainWindow: View {
 
 }
 
+private struct SidebarSection: View {
+    let title: String
+    let pages: [AppPage]
+    @ObservedObject var router: AppRouter
+    let badge: (AppPage) -> Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption2.weight(.bold)).tracking(1.2).foregroundStyle(.tertiary).padding(.leading, 9)
+            ForEach(pages) { page in
+                Button { router.page = page } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: page.symbol).frame(width: 17)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(page.title).font(.body.weight(router.page == page ? .semibold : .regular))
+                            if page == .ports { Text("For developers").font(.caption2).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        if badge(page) > 0 { Text("\(badge(page))").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                    .background(router.page == page ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(router.page == page ? .isSelected : [])
+            }
+        }
+    }
+}
+
 struct NowPage: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                Text("Your Mac, right now").font(.largeTitle.bold())
                 StatusHero(model: model)
-                if let receipt = model.receipt { ReceiptBanner(receipt: receipt, dismiss: model.dismissReceipt) }
                 if model.hasSwapPressure { memoryWarning }
-                if let report = model.report { vitals(report.host) }
                 findings
+                if let report = model.report {
+                    DisclosureGroup("Mac details") { vitals(report.host).padding(.top, 10) }
+                        .font(.callout.weight(.semibold)).padding(.horizontal, 4)
+                }
             }
             .padding(20)
         }
-        .overlay { if model.isScanning && model.report == nil { ProgressView("Sniffing around…") } }
+        .overlay { if model.isScanning && model.report == nil { ProgressView("Checking what your apps left behind…") } }
     }
 
     private var findings: some View {
@@ -133,10 +180,10 @@ struct NowPage: View {
                 VStack(spacing: 0) {
                     if model.groups.count > 1 {
                         HStack {
-                            Text("\(model.groups.reduce(0) { $0 + $1.count }) reviewed candidates")
+                            Text("\(model.groups.reduce(0) { $0 + $1.count }) items can be closed")
                                 .font(.callout).foregroundStyle(.secondary)
                             Spacer()
-                            Button("Review all closes") {
+                            Button("Close \(model.groups.reduce(0) { $0 + $1.count }) unused things…") {
                                 Task { await model.requestProcessReview(model.groups) }
                             }
                             .disabled(model.isStale || model.isReviewing)
@@ -152,16 +199,16 @@ struct NowPage: View {
                 }
             }
         } label: {
-            Label("Background work", systemImage: "waveform.path.ecg")
+            Label("What apps left behind", systemImage: "waveform.path.ecg")
                 .font(.headline)
         }
     }
 
     private func vitals(_ host: HostSnapshot) -> some View {
         HStack(spacing: 12) {
-            MetricCard(title: "System load", value: String(format: "%.1f", host.load), detail: "across \(host.cores) cores", symbol: "cpu")
-            MetricCard(title: "Swap used", value: "\(host.swapPercent)%", detail: "fast-memory overflow", symbol: "memorychip")
-            MetricCard(title: "Uptime", value: "\(host.uptimeDays)d", detail: "since restart", symbol: "clock")
+            MetricCard(title: "Work level", value: String(format: "%.1f", host.load), detail: "across \(host.cores) CPU cores", symbol: "cpu")
+            MetricCard(title: "Disk-backed memory", value: "\(host.swapPercent)%", detail: "of backup memory in use", symbol: "memorychip")
+            MetricCard(title: "Time since restart", value: "\(host.uptimeDays)d", detail: "days", symbol: "clock")
         }
     }
 
@@ -171,8 +218,8 @@ struct NowPage: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title2).foregroundStyle(.orange).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Your Mac is out of fast memory").font(.headline)
-                    Text("It is shuffling work to disk. Closing background leftovers will not fix that; save your work and restart from the Apple menu when you can.")
+                    Text("Restart recommended").font(.headline)
+                    Text("Your Mac has been running for \(model.report?.host.uptimeDays ?? 0) days and is using slower disk space as backup memory. Save your work, then choose Apple menu › Restart. Cleaning the items below will not fix this.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -225,17 +272,21 @@ struct StatusHero: View {
 
     private var title: String {
         if model.scanError != nil { return model.isStale ? "Last result is stale" : "Machogs could not check" }
-        if model.hasHotFinding { return "Found the hog" }
-        if !model.groups.isEmpty { return "Leftovers found" }
-        if model.report != nil { return "Nothing is hogging your Mac" }
-        return "Sniffing around…"
+        if model.isStale { return "These results are old" }
+        if let first = model.groups.first {
+            let owner = first.owner.isEmpty ? "An app" : first.owner
+            return first.isHot ? "\(owner) is keeping your Mac busy" : "\(owner) left \(first.count) thing\(first.count == 1 ? "" : "s") running"
+        }
+        if model.report != nil { return "No hogs hiding here" }
+        return "Checking what your apps left behind"
     }
 
     private var detail: String {
-        if let error = model.scanError { return error }
-        if model.hasHotFinding { return "A background program is using enough CPU to cause heat or fan noise." }
-        if !model.groups.isEmpty { return "Idle background work is holding memory. Review it before anything closes." }
-        return "Looking changes nothing. Closing is always your call."
+        if model.isStale { return "The last check is still shown, but actions are paused until MacHogs can check again." }
+        if let error = model.scanError { return "Nothing changed. Try again. \(error)" }
+        if model.hasHotFinding { return "It is working hard enough to cause heat or fan noise. You can close it after one final safety check." }
+        if !model.groups.isEmpty { return "It is idle. It can use memory, but it is not heating your Mac." }
+        return model.report == nil ? "This check is read-only. Nothing can close." : "Nothing stuck or abandoned needs your attention."
     }
 
     private var color: Color {
@@ -273,7 +324,7 @@ struct FindingRow: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Button("Review close", action: review)
+            Button("Close \(group.count) safely…", action: review)
                 .disabled(disabled)
         }
         .padding(.vertical, 12)
@@ -287,16 +338,16 @@ struct PortsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                PageIntro(title: "Who is holding your ports?", detail: "Machogs names the listener and leaves macOS services and live coding sessions alone.")
+                PageIntro(title: "Find what is using a port", detail: "A port is a numbered door apps use for local connections. If an app says ‘port already in use,’ look here.")
                 if let error = model.portsError { ErrorCard(message: error, retry: { Task { await model.loadPorts() } }) }
                 if let report = model.portsReport {
                     let closable = report.ports.filter(\.isClosable)
                     let protected = report.ports.filter(\.protected)
                     let system = report.ports.filter { !$0.isClosable && !$0.protected }
-                    PortSection(title: "Yours", detail: "Can be reviewed", items: closable, model: model)
+                    PortSection(title: "Yours", detail: "Can be closed after a safety check", items: closable, model: model)
                     PortSection(title: "Protected live work", detail: "Shown, never stopped", items: protected, model: model)
                     PortSection(title: "macOS and managed services", detail: "Killing these would not help", items: system, model: model)
-                    if report.ports.isEmpty { EmptyState(symbol: "network", title: "No listening ports", detail: "Nothing is listening for local connections right now.") }
+                    if report.ports.isEmpty { EmptyState(symbol: "network", title: "No apps are waiting for local connections", detail: "No open ports need your attention right now.") }
                 } else {
                     ProgressView("Checking ports…").frame(maxWidth: .infinity).padding(40)
                 }
@@ -320,7 +371,7 @@ struct PortSection: View {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         if index > 0 { Divider() }
                         HStack(spacing: 12) {
-                            Text(":\(item.port)").font(.headline.monospacedDigit()).frame(width: 58, alignment: .leading)
+                            Text("Port \(item.port)").font(.headline.monospacedDigit()).frame(width: 86, alignment: .leading)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.process).font(.body.weight(.medium))
                                 Text(portDetail(item)).font(.caption).foregroundStyle(.secondary)
@@ -328,9 +379,9 @@ struct PortSection: View {
                             }
                             Spacer()
                             if item.isClosable {
-                                Button("Review freeing port") { Task { await model.requestPortReview(item) } }
+                                Button("Free port \(item.port)…") { Task { await model.requestPortReview(item) } }
                             } else {
-                                Label(item.protected ? "Protected" : "Left alone", systemImage: "lock.shield")
+                                Label(item.protected ? "Active work — protected" : "Managed by macOS", systemImage: "lock.shield")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -354,12 +405,12 @@ struct StoragePage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                PageIntro(title: "A storage X-ray, not a file cleaner", detail: "Machogs measures common junk spots. Personal files never get a delete button.")
+                PageIntro(title: "Make room safely", detail: "MacHogs checks common caches and large folders. It never offers to delete personal files.")
                 if let error = model.diskError { ErrorCard(message: error, retry: { Task { await model.loadDisk() } }) }
                 if let report = model.diskReport {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { Text("\(report.disk.usedGB) GB used").font(.title2.bold()); Spacer(); Text("of \(report.disk.totalGB) GB") }
+                            HStack { Text("\(max(0, report.disk.totalGB - report.disk.usedGB)) GB free").font(.title2.bold()); Spacer(); Text("\(report.disk.usedGB) GB used") }
                             ProgressView(value: Double(report.disk.percent), total: 100)
                             Text("\(report.disk.percent)% full").font(.caption).foregroundStyle(.secondary)
                         }.padding(4)
@@ -377,7 +428,7 @@ struct StoragePage: View {
                                     }
                                     Spacer()
                                     if item.verdict == "safe" {
-                                        Button("Review clearing") { model.requestDiskReview(item) }
+                                        Button("Clear \(item.sizeText)…") { model.requestDiskReview(item) }
                                     } else {
                                         Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.path) }
                                     }
@@ -413,10 +464,10 @@ struct ReceiptsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PageIntro(title: "Proof, not cleaner theatre", detail: "Receipts come from successful engine actions. Failed, cancelled, protected, and already-gone reviews do not count.")
+                PageIntro(title: "Your receipts", detail: "A receipt appears only after MacHogs successfully closes something you approved.")
                 if history.isEmpty {
-                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "Close your first reviewed hog from Now and the shared engine log will appear here.")
-                    Button("Open Now", action: openNow)
+                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something you approve, the proof will appear here.")
+                    Button("Check my Mac", action: openNow)
                 } else {
                     GroupBox {
                         VStack(spacing: 0) {
@@ -433,10 +484,10 @@ struct ReceiptsPage: View {
                                 }.padding(.vertical, 9)
                             }
                         }
-                    } label: { Label("Close history", systemImage: "clock.arrow.circlepath") }
+                    } label: { Label("Receipt history", systemImage: "clock.arrow.circlepath") }
 
                     HStack {
-                        Button(copied ? "Copied" : "Copy my receipt card") { copyCard() }
+                        Button(copied ? "Copied — paste it anywhere" : "Copy the evidence") { copyCard() }
                         if let error { Text(error).font(.caption).foregroundStyle(.orange) }
                     }
                 }
@@ -477,20 +528,20 @@ struct SettingsPage: View {
     var body: some View {
         Form {
             Section("Background") {
-                Toggle("Shoulder taps", isOn: $shoulderTaps)
+                Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
-                Text("Alerts lead to Review. They never close a process.").font(.caption).foregroundStyle(.secondary)
-                Toggle("Start at Login", isOn: $startAtLogin)
+                Text("Alerts open MacHogs. They never close anything.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
-                Toggle("Sounds", isOn: $soundOn)
+                Toggle("Play sounds", isOn: $soundOn)
                     .onChange(of: soundOn, perform: settings.setSound)
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
             }
-            Section("The promises") {
-                PromiseRow("Looking changes nothing.")
-                PromiseRow("Every action is named, reviewed, and checked again by the engine.")
+            Section("Safety") {
+                PromiseRow("Checks are read-only.")
+                PromiseRow("Before anything closes, you see it and the engine checks it again.")
                 PromiseRow("Live coding sessions and macOS stay protected.")
                 PromiseRow("Personal files never get a delete button.")
             }
@@ -513,6 +564,7 @@ struct ReviewSheet: View {
     let review: ActionReview
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showsEveryItem = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -528,12 +580,47 @@ struct ReviewSheet: View {
             GroupBox {
                 switch review.kind {
                 case .processes(let findings):
-                    VStack(alignment: .leading, spacing: 9) {
-                        ForEach(findings) { item in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.story).font(.body.weight(.medium))
-                                Text("\(item.owner) • PID \(item.pid)").font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if showsEveryItem {
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 10) {
+                                    ForEach(findings) { item in
+                                        Text(item.story)
+                                            .font(.caption)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                                .padding(.vertical, 4)
                             }
+                            .frame(maxHeight: 260)
+                        } else {
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 12) {
+                                    ForEach(review.processGroups) { group in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(group.owner.isEmpty ? "Unknown app" : group.owner)
+                                                .font(.headline)
+                                            Text(groupLabel(group))
+                                                .font(.body.weight(.semibold))
+                                            Text(group.story)
+                                                .font(.callout)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .accessibilityElement(children: .combine)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .frame(maxHeight: 260)
+                        }
+
+                        if findings.count > review.processGroups.count {
+                            Button(showsEveryItem ? "Show grouped summary" : "Show all \(findings.count) items") {
+                                showsEveryItem.toggle()
+                            }
+                            .font(.callout.weight(.medium))
                         }
                     }
                 case .port(let item):
@@ -544,33 +631,95 @@ struct ReviewSheet: View {
             }
 
             HStack {
-                Button("Cancel", role: .cancel) { model.cancelReview(); dismiss() }
+                Button("Keep them running", role: .cancel) { model.cancelReview(); dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(model.isActing)
                 Spacer()
                 Button(review.confirmLabel, role: .destructive) {
                     Task { await model.confirmReview(); dismiss() }
                 }
-                .keyboardShortcut(.defaultAction)
+                .disabled(model.isActing)
             }
         }
         .padding(24)
         .frame(width: 520)
     }
+
+    private func groupLabel(_ group: FindingGroup) -> String {
+        let noun = group.what.isEmpty ? "background item" : group.what
+        return "\(group.count) \(noun)\(group.count == 1 || noun.hasSuffix("s") ? "" : "s")"
+    }
 }
 
-struct ReceiptBanner: View {
+struct SuccessReceipt: View {
+    let receipt: CleanupReceipt
+    @ObservedObject var model: AppModel
+    let viewReceipt: () -> Void
+    let dismiss: () -> Void
+    @State private var copied = false
+    @State private var copyError: String?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 18) {
+            PigMascot(mood: .pleased, size: 86)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Caught in 4K.")
+                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                Text(receipt.message).font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    if receipt.canShare {
+                        Button("View receipt", action: viewReceipt)
+                            .buttonStyle(.borderedProminent)
+                        Button(copied ? "Copied — paste it anywhere" : "Copy the evidence") { copyEvidence() }
+                    } else {
+                        Button("Done", action: dismiss)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    if let copyError { Text(copyError).font(.caption).foregroundStyle(.orange) }
+                }
+            }
+            Spacer(minLength: 8)
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle.fill").font(.title3).accessibilityLabel("Dismiss receipt")
+            }
+            .buttonStyle(.borderless).foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(LinearGradient(colors: [Color.pink.opacity(0.16), Color.orange.opacity(0.08)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.pink.opacity(0.25)))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func copyEvidence() {
+        Task {
+            do {
+                let card = try await model.makeShareCard()
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(card, forType: .string)
+                copied = true; copyError = nil
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                copied = false
+            } catch { copyError = error.localizedDescription }
+        }
+    }
+}
+
+struct CalmResult: View {
     let receipt: CleanupReceipt
     let dismiss: () -> Void
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            PigMascot(mood: receipt.closedCount > 0 ? .pleased : .curious, size: 38)
+            PigMascot(mood: .curious, size: 38)
             Text(receipt.message).font(.callout.weight(.medium))
             Spacer()
             Button(action: dismiss) { Image(systemName: "xmark").accessibilityLabel("Dismiss result") }
                 .buttonStyle(.borderless)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.green.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.primary.opacity(0.045)))
     }
 }
 

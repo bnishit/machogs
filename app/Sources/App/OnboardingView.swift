@@ -1,221 +1,225 @@
 import AppKit
+import MachogsCore
 import SwiftUI
 
 struct OnboardingView: View {
+    @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var step = 0
-    @State private var shoulderTaps = true
+    @State private var scene = 0
+    @State private var keepWatch = true
+    @State private var allowAlerts = false
     @State private var startAtLogin = true
     @State private var finishing = false
+    @State private var showSightDetails = false
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.pink.opacity(0.16), Color.orange.opacity(0.08), Color.clear],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 0) {
+            LinearGradient(colors: [Color.pink.opacity(0.18), Color.orange.opacity(0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
             Group {
-                switch step {
-                case 0: purpose
-                case 1: trust
-                default: choices
+                switch scene {
+                case 0: welcome
+                case 1: reveal
+                default: watchChoice
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(34)
-            .id(step)
-            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
-
-            HStack {
-                Button("Back") { move(to: step - 1) }
-                    .disabled(step == 0 || finishing)
-                    .buttonStyle(.borderless)
-                Spacer()
-                HStack(spacing: 6) {
-                    ForEach(0..<3) { index in
-                        Capsule()
-                            .fill(index == step ? Color.pink : Color.secondary.opacity(0.22))
-                            .frame(width: index == step ? 24 : 7, height: 7)
-                    }
-                }
-                    .accessibilityLabel("Onboarding step \(step + 1) of 3")
-                Spacer()
-                if step < 2 {
-                    Button("Next") { move(to: step + 1) }
-                        .keyboardShortcut(.defaultAction)
-                } else {
-                    Button(finishing ? "Opening…" : "Open Machogs") { finish() }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(finishing)
-                }
-            }
-            .padding(.horizontal, 20)
-            .frame(height: 58)
-            .background(.ultraThinMaterial)
-            }
+            .padding(42).id(scene)
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
         }
-        .frame(minWidth: 640, idealWidth: 680, minHeight: 480, idealHeight: 520)
+        .overlay(alignment: .top) { sceneIndicator.padding(.top, 22) }
+        .frame(minWidth: 720, idealWidth: 760, minHeight: 540, idealHeight: 580)
         .background(.regularMaterial)
-        .background(WindowSizer(width: 680, height: 520))
+        .background(WindowSizer(width: 760, height: 580))
     }
 
-    private var purpose: some View {
-        HStack(spacing: 34) {
-            ZStack {
-                Circle()
-                    .fill(Color.pink.opacity(0.14))
-                    .frame(width: 230, height: 230)
-                Circle()
-                    .stroke(Color.pink.opacity(0.13), lineWidth: 20)
-                    .frame(width: 185, height: 185)
-                PigMascot(mood: .curious, size: 150)
-                Text("sniff…")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.pink)
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(.regularMaterial, in: Capsule())
-                    .rotationEffect(.degrees(-7))
-                    .offset(x: 76, y: -82)
-            }
-            VStack(alignment: .leading, spacing: 16) {
-                Text("MEET YOUR MAC'S NEW NOSE")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.6)
-                    .foregroundStyle(.pink)
-                Text("Your Mac grew a secret second shift.")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Machogs sniffs out stuck and abandoned work, names the app that left it, and shows what it has cost.")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Label("Looking changes nothing", systemImage: "eye")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: 340, alignment: .leading)
+    private var welcome: some View {
+        HStack(spacing: 46) {
+            PigStage(mood: .curious, caption: "Apps leave messes.\nThe pig finds them.", showsSniffBubble: true).frame(width: 280)
+            VStack(alignment: .leading, spacing: 20) {
+                Text("YOUR MAC, UNMASKED").font(.caption.weight(.bold)).tracking(1.5).foregroundStyle(.pink)
+                Text("Your apps don’t always go home when you do.")
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                Text("Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. MacHogs names the app and shows whether it matters.")
+                    .font(.title3).foregroundStyle(.secondary)
+                Button { showSightDetails.toggle() } label: { Label("What can the pig see?", systemImage: "eye") }
+                    .buttonStyle(.link)
+                    .popover(isPresented: $showSightDetails) {
+                        Text("Only facts about running programs that macOS already shows. Not your files, messages, passwords, tabs, or browser history.")
+                            .font(.callout).padding(18).frame(width: 340)
+                    }
+                Button("Sniff my Mac") { sniff() }
+                    .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
+                Label("This first check only looks. Nothing can close.", systemImage: "hand.raised.fill")
+                    .font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+            }.frame(maxWidth: 390, alignment: .leading)
         }
     }
 
-    private var trust: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Suspicion is healthy.")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                    Text("So the pig comes with boundaries.")
-                        .font(.title3).foregroundStyle(.secondary)
+    private var sceneIndicator: some View {
+        HStack(spacing: 7) {
+            ForEach(0..<3, id: \.self) { index in
+                Capsule()
+                    .fill(index <= scene ? Color.pink : Color.secondary.opacity(0.22))
+                    .frame(width: 30, height: 6)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(scene + 1) of 3")
+    }
+
+    private var reveal: some View {
+        VStack(spacing: 26) {
+            if model.isScanning || (model.report == nil && model.scanError == nil) {
+                PigMascot(mood: .sniffing, size: 148)
+                Text("Checking who forgot to clock out…").font(.system(size: 34, weight: .bold, design: .rounded))
+                Text("Looking only. Nothing will close.").font(.title3).foregroundStyle(.secondary)
+                ProgressView().controlSize(.large)
+            } else {
+                HStack(spacing: 34) {
+                    PigMascot(mood: revealMood, size: 150)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(revealTitle).font(.system(size: 36, weight: .bold, design: .rounded))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(revealBody).font(.title3).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Label("This check changed nothing", systemImage: "checkmark.shield.fill")
+                            .font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+                    }.frame(maxWidth: 430, alignment: .leading)
                 }
-                Spacer()
-                PigMascot(mood: .concerned, size: 78)
-            }
-            HStack(alignment: .top, spacing: 12) {
-                trustRow("eye", "Looks, never snoops", "Process facts only. No documents or browser history.")
-                trustRow("hand.raised.fill", "Asks before acting", "Every close gets a named review and your consent.")
-                trustRow("lock.shield.fill", "Protects live work", "The engine checks again. Coding sessions and macOS stay safe.")
-            }
-            Text("No Full Disk Access  •  No Accessibility access  •  No admin password")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .frame(maxWidth: 610, alignment: .leading)
-    }
-
-    private var choices: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("How watchful should the pig be?")
-                        .font(.system(size: 31, weight: .bold, design: .rounded))
-                    Text("Pick a perch. Both choices stay reversible.")
-                        .font(.title3).foregroundStyle(.secondary)
+                if model.scanError != nil {
+                    Button("Try again") { sniff(stayHere: true) }.buttonStyle(.borderedProminent).controlSize(.large)
+                } else {
+                    Button("Continue") { move(to: 2) }
+                        .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
                 }
-                Spacer()
-                PigMascot(mood: .pleased, size: 82)
             }
-            option("Shoulder taps", detail: "Get a calm alert when a real hog persists. macOS asks about notifications only after you open Machogs.", isOn: $shoulderTaps)
-            option("Start at Login", detail: "Recommended. The menu-bar pig can notice trouble before you go looking for it.", isOn: $startAtLogin)
-            Text(BuildIdentity.current().label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if let error = settings.setupError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-            }
-        }
-        .frame(maxWidth: 570, alignment: .leading)
+        }.frame(maxWidth: 650)
     }
 
-    private func trustRow(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        SoftPanel {
-            VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: symbol)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(Color.pink.gradient, in: Circle())
-                .accessibilityHidden(true)
-                Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private var watchChoice: some View {
+        HStack(spacing: 38) {
+            PigStage(mood: .pleased, caption: "One last thing.\nThen I’ll get to work.").frame(width: 230)
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Should the pig keep watch?").font(.system(size: 34, weight: .bold, design: .rounded))
+                Text("You stay in control either way.").font(.title3).foregroundStyle(.secondary)
+                ChoiceCard(title: "Keep watch for me", detail: "Checks every 2 minutes and opens MacHogs when it catches something. It never closes anything alone.", selected: keepWatch) { keepWatch = true }
+                ChoiceCard(title: "Only when I open MacHogs", detail: "No background checks. Run one whenever your Mac feels wrong.", selected: !keepWatch) {
+                    keepWatch = false; allowAlerts = false; startAtLogin = false
+                }
+                if keepWatch {
+                    Toggle("Tell me when the pig catches something", isOn: $allowAlerts)
+                    Toggle("Start MacHogs after I log in", isOn: $startAtLogin)
+                }
+                if let error = settings.setupError {
+                    Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                }
+                HStack {
+                    Button("Back") { move(to: 1) }.buttonStyle(.borderless)
+                    Spacer()
+                    Button(finishing ? "Opening…" : finishLabel) { finish() }
+                        .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction).disabled(finishing)
+                }
+            }.frame(maxWidth: 450, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
     }
 
-    private func option(_ title: String, detail: String, isOn: Binding<Bool>) -> some View {
-        Toggle(isOn: isOn) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-            }
-        }
-        .toggleStyle(.switch)
-        .accessibilityLabel(title)
-        .accessibilityHint(detail)
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.2)))
+    private var revealTitle: String {
+        if model.scanError != nil { return "The pig couldn’t get a clear scent." }
+        if model.hasSwapPressure { return "Your Mac needs a restart." }
+        guard let first = model.groups.first else { return "No freeloaders today." }
+        if first.isHot { return "\(owner(first)) is making your Mac work hard." }
+        return "\(owner(first)) left \(first.count) thing\(first.count == 1 ? "" : "s") running."
     }
 
+    private var revealBody: String {
+        if let error = model.scanError { return "Nothing changed. Try the read-only check again. \(error)" }
+        if model.hasSwapPressure {
+            return "Your Mac is using its disk as emergency working memory. That can make everything feel slow. Closing forgotten work will not undo it—save your work, then restart from the Apple menu."
+        }
+        guard let first = model.groups.first else { return "Your apps cleaned up after themselves. If your Mac still feels slow, MacHogs did not find the cause." }
+        let impact = first.isHot ? "This can cause heat, fan noise, and shorter battery life." : "It is idle, so it is not heating your Mac. It is still holding memory."
+        let more = model.groups.count > 1 ? " There are \(model.groups.count - 1) more app groups you can inspect." : ""
+        return "\(first.story) \(impact)\(more)"
+    }
+
+    private var revealMood: PigMood {
+        if model.scanError != nil || model.hasSwapPressure || model.hasHotFinding { return .concerned }
+        return model.groups.isEmpty ? .pleased : .curious
+    }
+
+    private var finishLabel: String {
+        guard let first = model.groups.first else { return "Open MacHogs" }
+        return "Show me what \(owner(first)) left"
+    }
+
+    private func owner(_ group: FindingGroup) -> String { group.owner.isEmpty ? "An app" : group.owner }
+    private func sniff(stayHere: Bool = false) { if !stayHere { move(to: 1) }; Task { await model.scan() } }
     private func move(to next: Int) {
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 1)) {
-            step = min(2, max(0, next))
-        }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 1)) { scene = min(2, max(0, next)) }
     }
-
     private func finish() {
         finishing = true
         Task {
-            _ = await settings.completeOnboarding(
-                shoulderTaps: shoulderTaps,
-                startAtLogin: startAtLogin
-            )
+            _ = await settings.completeOnboarding(shoulderTaps: keepWatch && allowAlerts, startAtLogin: keepWatch && startAtLogin)
             finishing = false
         }
     }
 }
 
+private struct PigStage: View {
+    let mood: PigMood
+    let caption: String
+    var showsSniffBubble = false
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle().fill(Color.pink.opacity(0.13)).frame(width: 245, height: 245)
+                Circle().stroke(Color.pink.opacity(0.10), lineWidth: 22).frame(width: 196, height: 196)
+                PigMascot(mood: mood, size: 160)
+                if showsSniffBubble { SniffBubble().offset(x: 82, y: -82) }
+            }
+            Text(caption).font(.title3.weight(.bold)).multilineTextAlignment(.center).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SniffBubble: View {
+    var body: some View {
+        Text("sniff…")
+            .font(.callout.weight(.semibold)).italic()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.pink.opacity(0.24)))
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct ChoiceCard: View {
+    let title: String, detail: String
+    let selected: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(selected ? Color.pink : Color.secondary)
+                VStack(alignment: .leading, spacing: 4) { Text(title).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }
+                Spacer()
+            }.padding(14).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(selected ? Color.pink.opacity(0.10) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color.pink.opacity(0.45) : Color.secondary.opacity(0.15)))
+    }
+}
+
 private struct WindowSizer: NSViewRepresentable {
-    let width: CGFloat
-    let height: CGFloat
-
-    func makeNSView(context: Context) -> SizingView {
-        SizingView(size: NSSize(width: width, height: height))
-    }
-    func updateNSView(_ view: SizingView, context: Context) {
-        view.desiredSize = NSSize(width: width, height: height)
-        view.apply()
-    }
-
+    let width: CGFloat, height: CGFloat
+    func makeNSView(context: Context) -> SizingView { SizingView(size: NSSize(width: width, height: height)) }
+    func updateNSView(_ view: SizingView, context: Context) { view.desiredSize = NSSize(width: width, height: height); view.apply() }
     final class SizingView: NSView {
         var desiredSize: NSSize
         init(size: NSSize) { desiredSize = size; super.init(frame: .zero) }
@@ -223,10 +227,8 @@ private struct WindowSizer: NSViewRepresentable {
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
         func apply() {
             DispatchQueue.main.async { [weak self] in
-                guard let self, let window = self.window,
-                      window.contentView?.frame.size != self.desiredSize else { return }
-                window.setContentSize(self.desiredSize)
-                window.center()
+                guard let self, let window = self.window, window.contentView?.frame.size != self.desiredSize else { return }
+                window.setContentSize(self.desiredSize); window.center()
             }
         }
     }

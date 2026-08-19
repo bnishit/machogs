@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import MachogsCore
 import SwiftUI
 
@@ -18,7 +20,7 @@ struct MachogsApp: App {
                 if settings.onboardingComplete {
                     MainWindow(model: model, settings: settings, router: router)
                 } else {
-                    OnboardingView(settings: settings)
+                    OnboardingView(model: model, settings: settings)
                 }
             }
             .onAppear { if settings.onboardingComplete { model.startPolling() } }
@@ -29,6 +31,10 @@ struct MachogsApp: App {
             .onChange(of: model.watchdogEvent) { event in
                 guard settings.onboardingComplete, settings.shoulderTaps, let event else { return }
                 NotificationCoordinator.shared.post(event, sound: settings.soundOn)
+            }
+            .onReceive(model.$receipt.dropFirst()) { receipt in
+                guard settings.soundOn, receipt?.isSuccess == true else { return }
+                NSSound(named: NSSound.Name("Glass"))?.play()
             }
         }
         MenuBarExtra {

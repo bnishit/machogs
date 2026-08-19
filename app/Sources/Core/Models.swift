@@ -210,6 +210,24 @@ public struct CleanupReceipt: Equatable, Sendable {
     public let cpuFreed: Double
     public let cpuSecondsAlreadyUsed: Int
     public let message: String
+    public let isSuccess: Bool
+    public let canShare: Bool
+
+    public init(
+        closedCount: Int,
+        cpuFreed: Double,
+        cpuSecondsAlreadyUsed: Int,
+        message: String,
+        isSuccess: Bool? = nil,
+        canShare: Bool? = nil
+    ) {
+        self.closedCount = closedCount
+        self.cpuFreed = cpuFreed
+        self.cpuSecondsAlreadyUsed = cpuSecondsAlreadyUsed
+        self.message = message
+        self.isSuccess = isSuccess ?? (closedCount > 0)
+        self.canShare = canShare ?? (closedCount > 0)
+    }
 
     public static func make(from report: EngineReport) -> CleanupReceipt {
         let killed = report.killedFindings
@@ -227,7 +245,9 @@ public struct CleanupReceipt: Equatable, Sendable {
             closedCount: killed.count,
             cpuFreed: cpu,
             cpuSecondsAlreadyUsed: seconds,
-            message: message
+            message: message,
+            isSuccess: !killed.isEmpty,
+            canShare: !killed.isEmpty
         )
     }
 }

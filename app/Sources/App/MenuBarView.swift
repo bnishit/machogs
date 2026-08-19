@@ -23,7 +23,7 @@ struct MenuBarIcon: View {
     private var label: String {
         if model.scanError != nil { return "Machogs needs attention" }
         if model.hasHotFinding { return "Machogs found hot background work" }
-        if !model.groups.isEmpty { return "Machogs found background leftovers" }
+        if !model.groups.isEmpty { return "Machogs found unused background work" }
         return "Machogs"
     }
 }
@@ -54,14 +54,14 @@ struct MenuBarView: View {
                 Button("Finish setup") { openMain(.now) }
                     .keyboardShortcut(.defaultAction)
             } else if model.groups.isEmpty {
-                Text(model.scanError == nil ? "No stuck or abandoned programs need review." : "The last scan failed. Open Machogs to retry.")
+                Text(model.scanError == nil ? "Nothing abandoned needs your attention." : "The last check failed. Open MacHogs to try again.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 0) {
                     ForEach(model.groups.prefix(3)) { group in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(group.story).font(.callout.weight(.medium)).lineLimit(3)
-                            Button("Review close") {
+                            Button("Show me") {
                                 openMain(.now)
                                 Task { await model.requestProcessReview([group]) }
                             }
@@ -73,11 +73,17 @@ struct MenuBarView: View {
             }
 
             if model.hasSwapPressure {
-                Label("Fast memory is full. Save your work and restart when you can.", systemImage: "memorychip")
+                Label("Your Mac needs a restart. Save your work first; closing background items will not fix this.", systemImage: "memorychip")
                     .font(.caption).foregroundStyle(.orange)
             }
 
             Divider().opacity(0.7)
+            HStack(spacing: 8) {
+                Button { openMain(.ports) } label: {
+                    Label("Ports", systemImage: "cable.connector")
+                }
+                Spacer()
+            }
             HStack {
                 Button("Open Machogs") { openMain(.now) }
                 Spacer()
@@ -98,9 +104,9 @@ struct MenuBarView: View {
 
     private var statusTitle: String {
         if model.scanError != nil { return model.isStale ? "Last result is stale" : "Could not check" }
-        if model.hasHotFinding { return "Found the hog" }
-        if !model.groups.isEmpty { return "Leftovers found" }
-        return model.report == nil ? "Sniffing around…" : "All clear"
+        if model.hasHotFinding { return "One item is making your Mac work hard" }
+        if !model.groups.isEmpty { return "\(model.groups.reduce(0) { $0 + $1.count }) unused items found" }
+        return model.report == nil ? "Checking what apps left behind…" : "Nothing abandoned right now"
     }
     private var statusDetail: String {
         if let date = model.lastSuccessfulScan { return "Last checked \(date.formatted(date: .omitted, time: .shortened))" }

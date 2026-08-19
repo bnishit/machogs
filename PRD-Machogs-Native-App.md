@@ -6,17 +6,29 @@ Decision: Keep Ports and Storage as first-class parts of the normal window. Keep
 
 ## 1. Summary
 
-MacHogs is the honest pig that finds work your Mac is doing behind your back. It explains the cause in plain words, asks before acting, checks safety again at the last moment, and gives a measured receipt for what actually changed.
+MacHogs catches apps that forgot to stop their background work. It names the app, explains whether the work is causing heat or only holding memory, asks before acting, checks safety again at the last moment, and gives measured proof for what actually changed.
 
 The app is not a second engine. The bundled command-line tool remains the source of truth for detection, protection, action, and receipts. The native app is the calm, clear consumer surface over it.
 
 ### Exact consumer promise
 
-> MacHogs finds stuck and abandoned work, tells you which app left it, and shows what it has cost. Looking changes nothing. Before anything closes, you see exactly what will stop and MacHogs checks that it is still safe. Live coding sessions and macOS stay protected. Every successful close leaves a receipt.
+> MacHogs catches apps that forgot to stop their background work. It names the app, shows what that work is doing, and closes nothing until you say so.
 
 Short form for tight surfaces:
 
-> Finds the hog. Names the app. Closes nothing without you.
+> Apps leave messes. The pig finds them.
+
+### Consumer ritual
+
+```text
+SNIFF — a real read-only check
+  → CATCH — a named app, a plain impact, and a safe next step
+  → RECEIPT — measured proof only after a real approved action
+```
+
+The product never celebrates a scan, warning, cancellation, protected item,
+failed action, or item that ended on its own. The pig guides people to evidence;
+it is not decoration on a system dashboard.
 
 Do not claim that MacHogs:
 
@@ -115,7 +127,7 @@ The main trap is “cleaner theatre”: dramatic warnings, inflated counts, and 
 first launch
   explain the pig
   explain the limits
-  choose shoulder taps + start at login
+  choose background watch + alerts + start at login
   open the normal window
 
 menu bar
@@ -125,10 +137,10 @@ menu bar
   open full window
 
 normal window
-  Now       current CPU, memory, and closable findings
-  Ports     local services and protected owners
-  Storage   disk X-ray and engine-approved cache clearing
-  Receipts  measured history and optional share card
+  Overview  one plain diagnosis, named app stories, and a safe next step
+  Ports     developer tool for “port already in use”
+  Storage   safe room-making without personal-file deletion
+  Receipts  measured successful history and optional evidence card
   Settings  watchdog, login, sound, trust promises
 ```
 
@@ -139,43 +151,55 @@ The menu bar answers “do I need to care right now?” The normal window answer
 **User** — every person opening this app build for the first time.
 **Entry point** — first app launch, before the normal window.
 **Case** — the onboarding completion key is absent.
-**What** — a three-step, fixed-size welcome window.
-**How** — promise → trust limits → optional watchdog choices → normal window.
+**What** — a three-scene welcome that performs a real read-only check.
+**How** — human hook → personalized reveal → optional background choices → Overview.
 **Why** — the app needs trust before it earns background presence.
 **Limits** — no account, tour carousel, fake scan, admin prompt, or forced permission.
 
-#### Step 1: purpose
+#### Scene 1: hook
 
-Headline: **Your Mac grew a secret second shift.**
+Headline: **Your apps don’t always go home when you do.**
 
-Body: **MacHogs finds stuck and abandoned background work, names the app that left it, and tells you what it has cost. Looking is always free. Closing is always your call.**
+Body: **Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. MacHogs names the app and shows whether it matters.**
 
-#### Step 2: trust
+Primary: **Sniff my Mac**
 
-Headline: **Suspicion is healthy.**
+Safety: **This first check only looks. Nothing can close.** A disclosure says it reads running-program facts exposed by macOS, not files, messages, passwords, tabs, or browser history.
 
-- **It can look.** It reads running-process facts that macOS already exposes. It does not read documents or browser history.
-- **It cannot act alone.** A finding is a suggestion. The person reviews and confirms every action.
-- **The engine gets the last word.** It checks again before action. Live coding sessions and macOS stay protected.
+#### Scene 2: real reveal
 
-Footer: **No Full Disk Access. No Accessibility access. No admin password.**
+The CTA runs the bundled engine in report-only mode. The screen shows no fake app, fake progress, permission prompt, PID, swap, system load, or unexplained candidate count.
 
-#### Step 3: optional background behavior
+- Hot: **[App] is making your Mac work hard.** It may cause heat or fan noise.
+- Idle: **[App] left [N] things running.** They hold memory but are not heating the Mac.
+- Clean: **No freeloaders today.** If the Mac still feels slow, MacHogs did not find the cause.
+- Memory pressure: **Your Mac needs a restart.** Cleanup will not undo the current slowdown.
+- Error: **The pig couldn’t get a clear scent.** Nothing changed; retry the read-only check.
 
-- **Shoulder taps**, default on: show the island and request macOS notification permission only after “Open MacHogs.” If denied, the island and manual app still work.
-- **Start at login**, recommended and visibly on: register only after the person confirms the screen. Failure does not block app use and is explained inline.
+Every reveal says: **This check changed nothing.**
 
-Completion opens the normal window on Now. Onboarding never repeats after successful completion. Settings keeps both choices reversible.
+#### Scene 3: optional background behavior
+
+- **Keep watch for me** explains two-minute checks and that alerts only open review.
+- **Only when I open MacHogs** disables background checks, alerts, and start at login.
+- **Tell me when the pig catches something** triggers the macOS prompt only when selected.
+- **Start MacHogs after I log in** is a separate, literal choice.
+
+Completion opens the personalized Overview. Onboarding never repeats after successful completion. Settings keeps both choices reversible.
 
 #### First-launch acceptance criteria
 
 - A fresh install shows onboarding once and brings it to the front.
-- No system notification prompt appears on step 1 or step 2.
-- Turning Shoulder taps off completes onboarding without a notification prompt.
+- The first CTA starts a real report-only scan. Scan completion alone cannot reach any action method.
+- No system notification prompt appears during the hook or reveal.
+- Within the reveal, a person can name the responsible app, the impact, and the safe next step without details.
+- Hot findings may mention heat; idle findings explicitly say they are not heating the Mac.
+- High memory pressure makes restart primary and says cleanup will not fix the current slowdown.
+- Turning alerts off completes onboarding without a notification prompt.
 - Turning Start at login off makes no login-item registration attempt.
 - A login-item failure leaves the person in control and offers a plain explanation.
 - Quitting before completion shows onboarding again next launch.
-- Completing onboarding opens Now, not Receipts or a menu-only dead end.
+- Completing onboarding opens Overview, not Receipts or a menu-only dead end.
 - VoiceOver reads title, body, toggles, progress, Back, and Next in a useful order.
 
 ### 7.3 Permissions and trust
@@ -185,7 +209,7 @@ MacHogs uses contextual permission: ask at the moment the feature is chosen, wit
 | Capability | System access | Product behavior |
 |---|---|---|
 | Scan running work | No prompt expected | Read-only by default |
-| Notifications | macOS notification prompt | Ask only after Shoulder taps is chosen |
+| Notifications | macOS notification prompt | Ask only after “Tell me when the pig catches something” is chosen |
 | Start at login | Login-item registration | Explicit onboarding or Settings toggle |
 | Close a process | No blanket permission | Engine revalidation plus named confirmation |
 | Clear cache | File access to an engine allow-list path | Two-step UI plus engine path revalidation |
@@ -199,7 +223,7 @@ If a future feature needs broader access, it requires a new product review. Do n
 **Entry point** — pig, fire, or camera icon in the menu bar.
 **Case** — manual glance or watchdog catch.
 **What** — a fast health summary and a route to review.
-**How** — click icon → read one verdict → Review or Open MacHogs.
+**How** — click icon → read one verdict → Show me, Ports, or Open MacHogs.
 **Why** — awareness without taking focus or asking for housekeeping.
 **Limits** — no process close, port kill, cache clear, or restart runs from a notification or island.
 
@@ -214,14 +238,14 @@ The popover contains:
 
 - one current verdict;
 - a short list of active findings;
-- a Review button per finding;
+- a **Show me** button per finding;
 - restart warning when memory pressure is above the engine threshold;
-- doorways to the normal window;
+- doorways to Overview and Ports;
 - Settings and Quit.
 
 The island is a non-activating tap on the shoulder. It may say “Caught the hog,” “Session over, mess left,” or “Clone army forming.” Its primary action is **Review**, never **Close it**. Dismiss snoozes only according to the watchdog contract; it does not mark a finding safe or resolved.
 
-System notifications use one foreground action: **Review it**. Clicking the body or action opens the same review state. No notification action carries consent to stop a process.
+System notifications use one foreground action: **Show me**. Clicking the body or action opens the same review state. No notification action carries consent to stop a process.
 
 Watchdog alerts remain limited to facts the engine supports:
 
@@ -259,7 +283,7 @@ Keep these pages:
 
 | Page | Role | Primary action |
 |---|---|---|
-| Now | CPU, memory, uptime, fresh closable findings | Review close or review restart |
+| Overview | One plain diagnosis, named app stories, and current closable findings | Review a named close or see restart guidance |
 | Ports | All listeners grouped as yours, protected, or system | Review freeing one port |
 | Storage | Disk use and engine verdict per location | Clear safe cache or Show in Finder |
 | Receipts | Measured result history and share loop | Copy share card |
@@ -267,7 +291,7 @@ Keep these pages:
 
 Ports and Storage remain first-class. They answer different user jobs, use real engine modes, and prevent MacHogs from being a one-warning novelty. They must not crowd the menu bar.
 
-The default window opens on Now. A deep link may open a specific page. Window close hides the window while the menu-bar app continues if enabled; Quit ends the app.
+The default window opens on Overview. A deep link may open a specific page. Window close hides the window while the menu-bar app continues if enabled; Quit ends the app.
 
 ### 7.6 Safe consent and action contract
 
@@ -281,18 +305,18 @@ The default window opens on Now. A deep link may open a specific page. Window cl
 
 #### Required process-close flow
 
-1. The finding card action says **Review close**.
+1. The finding card action says **Close [N] safely…**.
 2. The app sends the finding's stable identity to the engine. A stale process ID alone is not an identity.
 3. The engine returns a fresh plan with current identity, current protection result, and human story.
 4. The app shows only items that are still closable.
 5. Confirmation copy:
-   - title: **Close 3 helpers from ChatGPT?**
-   - body: **MacHogs checked these again just now. It will stop only the 3 items shown below. Unsaved work inside them can be lost. Live coding sessions and macOS stay protected.**
-   - buttons: **Cancel** and **Close 3 items**.
+   - title: **Close 3 unused things from ChatGPT?**
+   - body: **MacHogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected.**
+   - buttons: **Keep them running** and **Close 3 things**.
 6. On confirm, the engine rechecks at execution or consumes a short-lived plan that cannot target a reused process.
 7. The app renders the engine's actual result, including partial success, protection, or already-gone items.
 
-Bulk close is the same flow with all groups listed. It is not a shortcut around review.
+Bulk close is the same flow with every owner/story group inside a bounded scroll area. Raw per-item stories are available on request without moving the confirmation buttons. It is not a shortcut around review.
 
 Port copy:
 
@@ -302,11 +326,7 @@ Port copy:
 
 Storage keeps its two-step button because the engine already rechecks the exact path against a fixed safe list. Check-first and yours items never get a delete button.
 
-Restart copy:
-
-- title: **Restart this Mac now?**
-- body: **Every open app will close. Save your work first. A restart clears the memory pressure MacHogs found; closing background leftovers will not.**
-- buttons: **Cancel** and **Restart Mac**.
+MacHogs does not restart the Mac. When memory pressure is high, it gives plain save-work and Apple menu › Restart guidance and says closing background items will not fix the current slowdown.
 
 #### Action acceptance criteria
 
@@ -325,7 +345,7 @@ Restart copy:
 **Entry point** — successful action banner or Receipts page.
 **Case** — the engine confirms at least one close or cache clear.
 **What** — a measured receipt, then an optional cumulative share card.
-**How** — action completes → receipt appears → Receipts log updates → Copy card on request.
+**How** — action completes → immediate proof appears on the current page → process-close history updates → Copy the evidence on request.
 **Why** — the value is recovered work, not the violence of killing a process.
 **Limits** — battery and phone-charge numbers are estimates and stay hedged.
 
@@ -337,9 +357,9 @@ Immediate receipt order:
 4. projected next-day waste when supported;
 5. estimated battery or phone-charge comparison, clearly marked as rough.
 
-Receipts are written only for successful action results. The app and CLI share one log format and one scoreboard. A failed, cancelled, protected, or already-gone action is not a win and does not increment totals.
+Process receipts are written only for successful process-close results. The app and CLI share one process log format and one scoreboard. Port and cache actions get truthful immediate proof but do not enter that scoreboard. A failed, cancelled, protected, already-gone, or zero-byte action is not a win and does not increment totals.
 
-Sharing is pull, not push. The app offers **Copy my receipt card** on Receipts after there is history. It never opens a social site, posts, or adds referral tracking. The card comes from the engine's brag output so CLI and app agree.
+Sharing is pull, not push. The app offers **Copy the evidence** on Receipts after there is process history. It never opens a social site, posts, or adds referral tracking. The card comes from the engine's brag output so CLI and app agree.
 
 #### Receipt acceptance criteria
 
@@ -347,24 +367,24 @@ Sharing is pull, not push. The app offers **Copy my receipt card** on Receipts a
 - “Got back a CPU core” appears only when measured current CPU supports it.
 - Idle cleanup never claims it cooled the fan.
 - Estimate words remain in every battery and electricity comparison.
-- Empty Receipts says what will appear after the first close and links to Now.
+- Empty Receipts says what will appear after the first close and links to Overview.
 - Copy gives visible “Copied” feedback and does not trigger confetti every time.
 
 ### 7.8 State contracts
 
 | State | What the person sees | Allowed action |
 |---|---|---|
-| Checking, no prior data | “Sniffing around…” with progress | Wait or Quit |
-| Fresh clean | “Nothing is hogging your Mac” plus check time | Check again |
-| Fresh hot finding | Engine story and current heat | Review close |
-| Fresh idle finding | Memory-waste wording, not fan claim | Review close |
-| High swap | “Out of fast memory” and why restart is different | Review restart |
+| Checking, no prior data | “Checking what your apps left behind” with progress | Wait or Quit |
+| Fresh clean | “No hogs hiding here” plus check time | Check again |
+| Fresh hot finding | Named app, engine story, and current heat | Close safely… |
+| Fresh idle finding | Named app and memory-waste wording, not fan claim | Close safely… |
+| High swap | “Restart recommended” and why cleanup is different | Read restart guidance |
 | Already gone | “It cleaned itself up. Nothing to close.” | Done |
 | Protected | “Left alone — it belongs to a live session” | Open/quit owner if useful |
 | Stale after scan error | Last known data labeled with time and dimmed | Retry; no action from stale data |
 | First scan error | Plain cause, retry, and install/support route | Retry |
 | Partial action | Exact closed, gone, refused, and failed counts | Review remaining live items |
-| No receipt history | Friendly empty state and route to Now | Open Now |
+| No receipt history | Friendly empty state and route to Overview | Open Overview |
 | No disk junk | Real files are using the space | Show storage guidance only |
 | No freeable ports | System/protected listeners may still be listed | No kill action |
 
@@ -488,7 +508,7 @@ stapled, validated on clean Macs, uploaded, or published.
 | Settled CPU | Rebuilt menu-only test app measured 0.0% after scan settlement; the earlier repeating mascot transaction measured near 11% | Repeat on the integrated candidate and both supported CPU architectures |
 | Character motion | Repeating mascot transaction replaced by one-shot spring reactions | Preserve one-shot behavior through integration and accessibility review |
 | Accessibility | Reduce Motion behavior implemented | Complete VoiceOver, contrast, and transparency passes |
-| Automated verification | Full Xcode build plus 11/11 safety/state/watchdog tests; plist, shell syntax, and diff whitespace checks pass | Run the same suite after integration and on the exact packaged candidate |
+| Automated verification | Full Xcode build plus 13/13 safety/state/watchdog/receipt tests; plist, shell syntax, and diff whitespace checks pass | Run the same suite after integration and on the exact packaged candidate |
 
 The app must expose its current version and signing state in Settings. An ad-hoc build says **Development build — not ready to share**. A Developer ID signature may say **Developer ID signed**, but must not imply notarization by signature alone.
 
