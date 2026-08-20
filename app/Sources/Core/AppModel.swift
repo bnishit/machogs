@@ -209,22 +209,12 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// One-tap port free: same engine re-verification as the review flow,
-    /// no modal in between.
+    /// One-tap port free: a single engine call. The port kill path
+    /// re-checks identity and protection at the last moment itself.
     public func closePortNow(_ item: PortItem) async {
         guard item.isClosable, !isActing else { return }
         isActing = true
-        defer { isActing = false }
         do {
-            let fresh = try await service.inspectPort(item.port)
-            guard fresh.ports.contains(where: {
-                $0.pid == item.pid && $0.identity == item.identity && $0.isClosable
-            }) else {
-                receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
-                                         message: "The listener changed after the scan. Nothing was closed.",
-                                         kind: .port)
-                return
-            }
             let result = try await service.closePort(
                 PortTarget(port: item.port, pid: item.pid, identity: item.identity)
             )
@@ -233,16 +223,17 @@ public final class AppModel: ObservableObject {
             switch action {
             case "killed": message = "Port \(item.port) is free. Machogs closed \(item.process)."
             case "refused-protected": message = "Left alone. The listener now belongs to a protected live session."
-            case "identity-changed", nil: message = "The listener changed after review. Nothing was closed."
+            case "identity-changed", nil: message = "The listener changed after the scan. Nothing was closed."
             default: message = "Machogs could not free port \(item.port). Nothing else was closed."
             }
             receipt = CleanupReceipt(closedCount: action == "killed" ? 1 : 0, cpuFreed: 0,
                                      cpuSecondsAlreadyUsed: 0, message: message,
                                      isSuccess: action == "killed", canShare: false, kind: .port)
-            await loadPorts()
         } catch {
             portsError = error.localizedDescription
         }
+        isActing = false
+        Task { await loadPorts() }
     }
 
     public func requestDiskReview(_ item: DiskItem) {
@@ -254,8 +245,10 @@ public final class AppModel: ObservableObject {
         pendingReview = nil
     }
 
-    /// One-tap close for the menu bar popover: re-verifies with the engine
-    /// (protected sessions are refused there) but skips the review modal.
+    /// One-tap close: a single engine call. `kill --target` re-verifies
+    /// identity and protection at the moment of the kill, so no separate
+    /// plan round-trip is needed. The rescan happens after the receipt,
+    /// off the button's critical path.
     public func closeTargetsNow(_ targets: [ProcessTarget]) async {
         guard !isStale else {
             scanError = "Check again before closing anything. The last result is old."
@@ -263,25 +256,14 @@ public final class AppModel: ObservableObject {
         }
         guard !targets.isEmpty, !isActing else { return }
         isActing = true
-        defer { isActing = false }
         do {
-            let plan = try await service.planClose(targets: targets)
-            let actionable = plan.actionableFindings
-            if actionable.isEmpty {
-                let message = plan.protectedFindings.isEmpty
-                    ? "Already gone. Nothing to close."
-                    : "Left alone. It now belongs to a protected live session."
-                receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0, message: message)
-            } else {
-                let result = try await service.closeReviewed(
-                    targets: actionable.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }
-                )
-                receipt = Self.processReceipt(result, expected: actionable.count)
-            }
-            await scan()
+            let result = try await service.closeReviewed(targets: targets)
+            receipt = Self.processReceipt(result, expected: targets.count)
         } catch {
             scanError = error.localizedDescription
         }
+        isActing = false
+        Task { await scan() }
     }
 
     public func closeGroupNow(_ group: FindingGroup) async {
@@ -317,7 +299,7 @@ public final class AppModel: ObservableObject {
                     targets: findings.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }
                 )
                 receipt = Self.processReceipt(result, expected: findings.count)
-                await scan()
+                Task { await scan() }
             case .port(let item):
                 let result = try await service.closePort(
                     PortTarget(port: item.port, pid: item.pid, identity: item.identity)
@@ -333,7 +315,7 @@ public final class AppModel: ObservableObject {
                 receipt = CleanupReceipt(closedCount: action == "killed" ? 1 : 0, cpuFreed: 0,
                                          cpuSecondsAlreadyUsed: 0, message: message,
                                          isSuccess: action == "killed", canShare: false, kind: .port)
-                await loadPorts()
+                Task { await loadPorts() }
             case .disk(let item):
                 let result = try await service.clearDisk(path: item.path)
                 let amount = result.freedMB >= 1024
@@ -342,7 +324,7 @@ public final class AppModel: ObservableObject {
                 receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
                                          message: "Cleared \(result.label) and recovered \(amount).",
                                          isSuccess: result.freedMB > 0, canShare: false, kind: .disk)
-                await loadDisk()
+                Task { await loadDisk() }
             }
         } catch {
             switch review.kind {
