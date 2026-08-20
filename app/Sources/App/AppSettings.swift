@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import ServiceManagement
@@ -10,6 +11,9 @@ final class AppSettings: ObservableObject {
     @Published var soundOn: Bool
     @Published var startAtLogin: Bool
     @Published var setupError: String?
+    @Published var notificationStatus: UNAuthorizationStatus = .notDetermined
+
+    var notificationsDenied: Bool { shoulderTaps && notificationStatus == .denied }
 
     private let defaults: UserDefaults
 
@@ -63,6 +67,28 @@ final class AppSettings: ObservableObject {
     private func requestNotifications() async {
         _ = try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound])
+        await refreshNotificationStatus()
+    }
+
+    /// Called at launch. Covers users whose defaults predate onboarding —
+    /// they enabled shoulder taps but macOS was never actually asked.
+    func requestNotificationsIfNeeded() async {
+        let center = UNUserNotificationCenter.current()
+        if shoulderTaps, await center.notificationSettings().authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+        await refreshNotificationStatus()
+    }
+
+    func refreshNotificationStatus() async {
+        notificationStatus = await UNUserNotificationCenter.current()
+            .notificationSettings().authorizationStatus
+    }
+
+    func openNotificationSettings() {
+        let id = Bundle.main.bundleIdentifier ?? "com.bnishit.machogs"
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications?id=\(id)")!
+        NSWorkspace.shared.open(url)
     }
 }
 

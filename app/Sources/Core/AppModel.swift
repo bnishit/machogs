@@ -106,7 +106,7 @@ public final class AppModel: ObservableObject {
         pollingTask = Task { [weak self] in
             await self?.scan()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled else { break }
                 await self?.scan()
             }
@@ -218,6 +218,58 @@ public final class AppModel: ObservableObject {
         pendingReview = nil
     }
 
+    /// One-tap close for the menu bar popover: re-verifies with the engine
+    /// (protected sessions are refused there) but skips the review modal.
+    public func closeTargetsNow(_ targets: [ProcessTarget]) async {
+        guard !isStale else {
+            scanError = "Check again before closing anything. The last result is old."
+            return
+        }
+        guard !targets.isEmpty, !isActing else { return }
+        isActing = true
+        defer { isActing = false }
+        do {
+            let plan = try await service.planClose(targets: targets)
+            let actionable = plan.actionableFindings
+            if actionable.isEmpty {
+                let message = plan.protectedFindings.isEmpty
+                    ? "Already gone. Nothing to close."
+                    : "Left alone. It now belongs to a protected live session."
+                receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0, message: message)
+            } else {
+                let result = try await service.closeReviewed(
+                    targets: actionable.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }
+                )
+                receipt = Self.processReceipt(result, expected: actionable.count)
+            }
+            await scan()
+        } catch {
+            scanError = error.localizedDescription
+        }
+    }
+
+    public func closeGroupNow(_ group: FindingGroup) async {
+        await closeTargetsNow(group.targets)
+    }
+
+    public func closeEverythingNow() async {
+        await closeTargetsNow(groups.flatMap(\.targets))
+    }
+
+    public func snoozeGroup(_ groupID: String, minutes: Int = 60) {
+        watchdog.snooze(groupID: groupID, minutes: minutes)
+        if watchdogEvent != nil { watchdogEvent = nil }
+    }
+
+    /// Swap-pressure escape hatch: asks macOS for a normal restart (apps get
+    /// a chance to save); nothing is forced.
+    public func restartMac() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", "tell application \"System Events\" to restart"]
+        try? process.run()
+    }
+
     public func confirmReview() async {
         guard let review = pendingReview, !isActing else { return }
         isActing = true
@@ -244,7 +296,7 @@ public final class AppModel: ObservableObject {
                 }
                 receipt = CleanupReceipt(closedCount: action == "killed" ? 1 : 0, cpuFreed: 0,
                                          cpuSecondsAlreadyUsed: 0, message: message,
-                                         isSuccess: action == "killed", canShare: false)
+                                         isSuccess: action == "killed", canShare: false, kind: .port)
                 await loadPorts()
             case .disk(let item):
                 let result = try await service.clearDisk(path: item.path)
@@ -253,7 +305,7 @@ public final class AppModel: ObservableObject {
                     : "\(result.freedMB) MB"
                 receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
                                          message: "Cleared \(result.label) and recovered \(amount).",
-                                         isSuccess: result.freedMB > 0, canShare: false)
+                                         isSuccess: result.freedMB > 0, canShare: false, kind: .disk)
                 await loadDisk()
             }
         } catch {
@@ -293,6 +345,10 @@ public final class AppModel: ObservableObject {
             parts.append("Freed about \(String(format: "%.1f", cpu / 100)) of a CPU core.")
         } else if !killed.isEmpty {
             parts.append("They were wasting memory, not heating your Mac.")
+        }
+        let phoneCharges = seconds / 9000
+        if phoneCharges >= 1 {
+            parts.append("They had already burned about \(phoneCharges) phone charge\(phoneCharges == 1 ? "" : "s") of energy.")
         }
         return CleanupReceipt(closedCount: killed.count, cpuFreed: cpu,
                               cpuSecondsAlreadyUsed: seconds, message: parts.joined(separator: " "))

@@ -206,12 +206,15 @@ public struct PortsReport: Codable, Equatable, Sendable {
 }
 
 public struct CleanupReceipt: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable { case processes, port, disk }
+
     public let closedCount: Int
     public let cpuFreed: Double
     public let cpuSecondsAlreadyUsed: Int
     public let message: String
     public let isSuccess: Bool
     public let canShare: Bool
+    public let kind: Kind
 
     public init(
         closedCount: Int,
@@ -219,7 +222,8 @@ public struct CleanupReceipt: Equatable, Sendable {
         cpuSecondsAlreadyUsed: Int,
         message: String,
         isSuccess: Bool? = nil,
-        canShare: Bool? = nil
+        canShare: Bool? = nil,
+        kind: Kind = .processes
     ) {
         self.closedCount = closedCount
         self.cpuFreed = cpuFreed
@@ -227,6 +231,7 @@ public struct CleanupReceipt: Equatable, Sendable {
         self.message = message
         self.isSuccess = isSuccess ?? (closedCount > 0)
         self.canShare = canShare ?? (closedCount > 0)
+        self.kind = kind
     }
 
     public static func make(from report: EngineReport) -> CleanupReceipt {

@@ -2,6 +2,7 @@ import AppKit
 import MachogsCore
 import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 enum AppPage: String, CaseIterable, Identifiable {
     case now, ports, storage, receipts, settings
@@ -424,8 +425,15 @@ struct StoragePage: View {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { Text("\(max(0, report.disk.totalGB - report.disk.usedGB)) GB free").font(.title2.bold()); Spacer(); Text("\(report.disk.usedGB) GB used") }
-                            ProgressView(value: Double(report.disk.percent), total: 100)
-                            Text("\(report.disk.percent)% full").font(.caption).foregroundStyle(.secondary)
+                            DiskGauge(pct: report.disk.percent)
+                            HStack {
+                                Text("\(report.disk.percent)% full").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                if clearableMB(report) >= 100 {
+                                    Text("\(sizeText(clearableMB(report))) safely clearable below")
+                                        .font(.caption.weight(.semibold)).foregroundStyle(.teal)
+                                }
+                            }
                         }.padding(4)
                     }
                     GroupBox {
@@ -465,6 +473,36 @@ struct StoragePage: View {
     private func verdictColor(_ item: DiskItem) -> Color {
         switch item.verdict { case "safe": return .green; case "check": return .orange; default: return .blue }
     }
+    private func clearableMB(_ report: DiskReport) -> Int {
+        report.items.filter { $0.verdict == "safe" }.reduce(0) { $0 + $1.sizeMB }
+    }
+    private func sizeText(_ mb: Int) -> String {
+        mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
+    }
+}
+
+// The disk fills up like a battery gauge, springing to its level.
+struct DiskGauge: View {
+    let pct: Int
+    @State private var shown = false
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: pct >= 90 ? [.orange, .red] : [.teal, .green],
+                        startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(6, geo.size.width * CGFloat(pct) / 100) * (shown ? 1 : 0.02))
+            }
+        }
+        .frame(height: 7)
+        .accessibilityElement()
+        .accessibilityLabel("Disk \(pct) percent full")
+        .onAppear {
+            withAnimation(.spring(response: 0.9, dampingFraction: 0.8).delay(0.15)) { shown = true }
+        }
+    }
 }
 
 struct ReceiptsPage: View {
@@ -473,42 +511,171 @@ struct ReceiptsPage: View {
     @State private var history: [ReceiptEvent] = []
     @State private var copied = false
     @State private var error: String?
+    @State private var appeared = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PageIntro(title: "Your receipts", detail: "A receipt appears only after MacHogs successfully closes something you approved.")
+                PageIntro(title: "Your receipts", detail: sinceText)
                 if history.isEmpty {
-                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something you approve, the proof will appear here.")
+                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something you approve, the score starts here.")
                     Button("Check my Mac", action: openNow)
                 } else {
-                    GroupBox {
-                        VStack(spacing: 0) {
-                            ForEach(Array(history.prefix(50).enumerated()), id: \.element.id) { index, event in
-                                if index > 0 { Divider() }
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(event.what).font(.body.weight(.medium))
-                                        Text("Left by \(event.owner) • \(event.date.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text("\(event.cpuSeconds)s CPU").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                }.padding(.vertical, 9)
-                            }
-                        }
-                    } label: { Label("Receipt history", systemImage: "clock.arrow.circlepath") }
-
-                    HStack {
-                        Button(copied ? "Copied — paste it anywhere" : "Copy the evidence") { copyCard() }
-                        if let error { Text(error).font(.caption).foregroundStyle(.orange) }
-                    }
+                    heroRow.joyReveal(appeared, delay: 0.02)
+                    hallOfShame.joyReveal(appeared, delay: 0.06)
+                    bragRow.joyReveal(appeared, delay: 0.10)
+                    historyList.joyReveal(appeared, delay: 0.14)
                 }
             }
             .padding(20)
         }
-        .onAppear { history = ReceiptEvent.load() }
+        .onAppear {
+            history = ReceiptEvent.load()
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { appeared = true }
+        }
         .onChange(of: model.receipt) { _ in history = ReceiptEvent.load() }
+    }
+
+    private var sinceText: String {
+        guard let since = history.map(\.date).min() else {
+            return "A receipt appears only after MacHogs successfully closes something you approved."
+        }
+        return "What your Mac was doing behind your back · since \(since.formatted(.dateTime.day().month()))"
+    }
+
+    private var totalCPUSeconds: Int { history.reduce(0) { $0 + $1.cpuSeconds } }
+    private var phoneCharges: Int { totalCPUSeconds / 9000 }
+
+    private var timeWasted: (value: Double, suffix: String) {
+        let s = totalCPUSeconds
+        if s >= 7200 { return (Double(s / 3600), "h") }
+        if s >= 120 { return (Double(s / 60), "m") }
+        return (Double(s), "s")
+    }
+
+    private var byApp: [AppScore] {
+        Dictionary(grouping: history, by: \.owner)
+            .map { AppScore(owner: $0.key, closes: $0.value.count,
+                            cpuSeconds: $0.value.reduce(0) { $0 + $1.cpuSeconds }) }
+            .sorted { ($0.cpuSeconds, $0.closes) > ($1.cpuSeconds, $1.closes) }
+    }
+
+    private var heroRow: some View {
+        HStack(spacing: 12) {
+            StatCard(emoji: "⏱️", value: timeWasted.value, suffix: timeWasted.suffix,
+                     caption: "of CPU time wasted on programs you never opened", tint: .orange)
+            StatCard(emoji: "🧹", value: Double(history.count), suffix: "",
+                     caption: "background programs caught and closed", tint: .pink)
+            StatCard(emoji: "⚡", value: Double(phoneCharges), suffix: "",
+                     caption: phoneCharges == 0
+                         ? "phone charges wasted — caught them before they cost you 😌"
+                         : "phone charges of wasted electricity", tint: .teal)
+        }
+    }
+
+    private var hallOfShame: some View {
+        let heavyBurn = (byApp.map(\.cpuSeconds).max() ?? 0) >= 60
+        let ranked = heavyBurn ? byApp : byApp.sorted { $0.closes > $1.closes }
+        let maxSecs = max(1, ranked.map(\.cpuSeconds).max() ?? 1)
+        let maxCloses = max(1, ranked.map(\.closes).max() ?? 1)
+        return GroupBox {
+            VStack(spacing: 12) {
+                ForEach(Array(ranked.prefix(6).enumerated()), id: \.element.id) { rank, app in
+                    shameRow(rank: rank, app: app, heavyBurn: heavyBurn,
+                             maxSecs: maxSecs, maxCloses: maxCloses)
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            VStack(alignment: .leading) {
+                Text("🏆 Hall of Shame").font(.headline)
+                Text("Who leaves the most junk running on this Mac.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func shameRow(rank: Int, app: AppScore, heavyBurn: Bool, maxSecs: Int, maxCloses: Int) -> some View {
+        // Bars scale to whatever metric did the ranking, so #1 always has the longest bar.
+        let frac = heavyBurn
+            ? Double(app.cpuSeconds) / Double(maxSecs)
+            : Double(app.closes) / Double(maxCloses)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("#\(rank + 1)")
+                    .font(.system(.caption, design: .monospaced).weight(.bold))
+                    .foregroundStyle(.tertiary)
+                Text(app.owner.isEmpty || app.owner == "unknown" ? "mystery programs 👻" : app.owner)
+                    .font(.system(.callout, design: .rounded).weight(.semibold))
+                    .foregroundStyle(rank == 0 ? Color.orange : Color.primary)
+                if rank == 0 { Text("👑") }
+                Spacer()
+                Text("\(app.closes) closed · \(timeText(app.cpuSeconds)) wasted")
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    Capsule()
+                        .fill(LinearGradient(colors: rank == 0 ? [.orange, .pink] : [.pink.opacity(0.7), .pink.opacity(0.4)],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(8, geo.size.width * frac) * (appeared ? 1 : 0.02))
+                }
+            }
+            .frame(height: 6)
+            .animation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.2 + Double(rank) * 0.07), value: appeared)
+        }
+        .hoverLift()
+        .accessibilityElement(children: .combine)
+    }
+
+    private func timeText(_ s: Int) -> String {
+        if s >= 7200 { return "\(s / 3600) hrs" }
+        if s >= 120 { return "\(s / 60) min" }
+        return "\(s) sec"
+    }
+
+    private var bragRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Flex it.").font(.system(.callout, design: .rounded).weight(.bold))
+                Text("One card with your totals, ready to paste anywhere.")
+                    .font(.system(.caption, design: .rounded)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                copyCard()
+            } label: {
+                Text(copied ? "Copied ✓ go flex" : "Copy the evidence 📸")
+            }
+            .buttonStyle(PigActionStyle(tint: copied ? .green : .pink))
+            if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(LinearGradient(colors: [Color.pink.opacity(0.10), Color.orange.opacity(0.08)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.pink.opacity(0.2), lineWidth: 1))
+    }
+
+    private var historyList: some View {
+        GroupBox {
+            VStack(spacing: 0) {
+                ForEach(Array(history.prefix(50).enumerated()), id: \.element.id) { index, event in
+                    if index > 0 { Divider() }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(event.what).font(.body.weight(.medium))
+                            Text("Left by \(event.owner) • \(event.date.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(event.cpuSeconds)s CPU").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }.padding(.vertical, 9)
+                }
+            }
+        } label: { Label("Receipt history", systemImage: "clock.arrow.circlepath") }
     }
 
     private func copyCard() {
@@ -518,11 +685,18 @@ struct ReceiptsPage: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(card, forType: .string)
                 copied = true; error = nil
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
                 copied = false
             } catch { self.error = error.localizedDescription }
         }
     }
+}
+
+struct AppScore: Identifiable {
+    let owner: String
+    let closes: Int
+    let cpuSeconds: Int
+    var id: String { owner }
 }
 
 struct SettingsPage: View {
@@ -544,6 +718,7 @@ struct SettingsPage: View {
                 Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
                 Text("Alerts open MacHogs. They never close anything.").font(.caption).foregroundStyle(.secondary)
+                notificationRow
                 Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
@@ -575,6 +750,33 @@ struct SettingsPage: View {
         }
         .formStyle(.grouped)
         .padding(12)
+        .task { await settings.refreshNotificationStatus() }
+    }
+
+    @ViewBuilder
+    private var notificationRow: some View {
+        switch settings.notificationStatus {
+        case .denied:
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "bell.slash.fill").foregroundStyle(.orange).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("macOS is blocking MacHogs alerts").font(.callout.weight(.semibold))
+                    Text("You said no to notifications once, so shoulder taps never reach you. Allow them in System Settings to get them back.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Open System Settings") { settings.openNotificationSettings() }
+            }
+        case .notDetermined:
+            HStack {
+                Text("macOS has not asked you about alerts yet.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Allow notifications") { Task { await settings.requestNotificationsIfNeeded() } }
+            }
+        default:
+            Label("Notifications are on. Shoulder taps will reach you.", systemImage: "bell.badge.fill")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -741,6 +943,53 @@ struct CalmResult: View {
     }
 }
 
+// Numbers that roll up from zero when they land on screen.
+struct CountUp: View, Animatable {
+    var value: Double
+    var suffix: String = ""
+    var animatableData: Double {
+        get { value }
+        set { value = newValue }
+    }
+    var body: some View {
+        Text("\(Int(value))\(suffix)")
+            .font(.system(size: 30, weight: .heavy, design: .rounded))
+            .monospacedDigit()
+    }
+}
+
+struct StatCard: View {
+    let emoji: String
+    let value: Double
+    let suffix: String
+    let caption: String
+    let tint: Color
+    @State private var shown = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(emoji).font(.system(size: 18)).accessibilityHidden(true)
+            CountUp(value: shown || reduceMotion ? value : 0, suffix: suffix)
+                .foregroundStyle(
+                    LinearGradient(colors: [tint, tint.opacity(0.65)],
+                                   startPoint: .top, endPoint: .bottom))
+            Text(caption)
+                .font(.system(.caption, design: .rounded).weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(tint.opacity(0.09)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(tint.opacity(0.22), lineWidth: 1))
+        .hoverLift()
+        .accessibilityElement(children: .combine)
+        .onAppear {
+            withAnimation(.spring(response: 1.1, dampingFraction: 0.9).delay(0.15)) { shown = true }
+        }
+    }
+}
+
 struct MetricCard: View {
     let title: String, value: String, detail: String, symbol: String
     var body: some View {
@@ -751,6 +1000,7 @@ struct MetricCard: View {
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        .hoverLift()
         .accessibilityElement(children: .combine)
     }
 }

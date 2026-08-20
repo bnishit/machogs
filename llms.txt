@@ -13,8 +13,8 @@ Download Machogs 1.2.0:
     https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg
 
 Open the DMG and drag Machogs to Applications. The app supports Apple silicon
-and Intel. Its first scan is read-only. Menu-bar and notification actions only
-open a fresh review; they never close anything directly.
+and Intel. Its first scan is read-only. One-tap Close actions re-verify every target
+with the engine first; protected live sessions are always refused.
 
 Use machogs when the user says their Mac is slow, hot, loud, losing battery,
 out of storage, or has a port already in use. It is especially useful for
@@ -119,7 +119,7 @@ findings are not counted unless `--dupes` is present. Always read `findings`.
 Machogs 1.2.0 is the public native app release. Its Developer ID-signed,
 Apple-notarized universal DMG is linked above. The app has a normal window,
 menu-bar Hogs, Storage and Ports views, Receipts, and Settings. Verified native
-behavior: menu-bar and notification actions open Review only; process and port
+behavior: one-tap Close re-verifies targets with the engine before acting; process and port
 actions use stable-identity engine planning and an execution-time recheck;
 stale targets never expand to other findings. The app targets macOS 13 or later
 and does not require an admin password, Full Disk Access, or Accessibility

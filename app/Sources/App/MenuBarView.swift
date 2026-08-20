@@ -7,7 +7,8 @@ struct MenuBarIcon: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Text("🐷").font(.system(size: 13)).frame(width: 18, height: 18)
+            Text(model.watchdogEvent != nil ? "📸" : "🐷")
+                .font(.system(size: 13)).frame(width: 18, height: 18)
             if model.scanError != nil || model.hasHotFinding {
                 Circle()
                     .fill(model.hasHotFinding ? Color.red : Color.orange)
@@ -22,6 +23,7 @@ struct MenuBarIcon: View {
 
     private var label: String {
         if model.scanError != nil { return "Machogs needs attention" }
+        if model.watchdogEvent != nil { return "Machogs caught something" }
         if model.hasHotFinding { return "Machogs found hot background work" }
         if !model.groups.isEmpty { return "Machogs found unused background work" }
         return "Machogs"
@@ -41,10 +43,14 @@ struct MenuBarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var workspace: MenuWorkspace = .hogs
     @State private var portQuery = ""
+    @State private var appeared = false
+    @State private var confettiTrigger = 0
+    @State private var closingID: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header.padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
+                .joyReveal(appeared, delay: 0)
 
             Picker("MacHogs view", selection: $workspace) {
                 Label(hogsTabTitle, systemImage: "sparkles").tag(MenuWorkspace.hogs)
@@ -56,6 +62,7 @@ struct MenuBarView: View {
             .disabled(!settings.onboardingComplete)
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
+            .joyReveal(appeared, delay: 0.05)
 
             Divider()
             ScrollView {
@@ -74,18 +81,28 @@ struct MenuBarView: View {
                 .padding(14)
             }
             .frame(height: 315)
+            .joyReveal(appeared, delay: 0.1)
 
             Divider()
             footer.padding(.horizontal, 14).padding(.vertical, 10)
         }
         .frame(width: 380)
+        .overlay(ConfettiBurst(trigger: confettiTrigger))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: workspace)
         .onAppear {
+            appeared = true
             MachogsSound.pop(enabled: settings.soundOn)
             if settings.onboardingComplete { model.startPolling() }
             loadWorkspaceIfNeeded(workspace)
+            Task { await settings.refreshNotificationStatus() }
         }
         .onChange(of: workspace) { loadWorkspaceIfNeeded($0) }
+        .onChange(of: model.receipt) { receipt in
+            if let receipt, receipt.closedCount > 0 { confettiTrigger += 1 }
+        }
+        .onChange(of: model.isActing) { acting in
+            if !acting { closingID = nil }
+        }
     }
 
     private var header: some View {
@@ -132,28 +149,93 @@ struct MenuBarView: View {
         } else if model.report == nil || model.isScanning && model.groups.isEmpty {
             MenuLoading(title: "Checking who forgot to clock out…", detail: "Looking only. Nothing will close.")
         } else if model.groups.isEmpty {
-            MenuState(symbol: "checkmark.circle", title: "Nothing abandoned", detail: "Your apps cleaned up after themselves.")
+            MenuState(symbol: "checkmark.circle", title: "All quiet 🐷",
+                      detail: "Your Mac is working only for you.")
         } else {
-            VStack(alignment: .leading, spacing: 12) {
-                if model.isStale { staleMessage("Couldn’t refresh. Review is paused until a fresh check succeeds.") }
-                if model.hasSwapPressure {
-                    Label("Your Mac needs a restart. Closing leftovers will not fix memory that is already full.", systemImage: "memorychip")
-                        .font(.caption.weight(.medium)).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 10) {
+                if model.isStale { staleMessage("Couldn’t refresh. Closing is paused until a fresh check succeeds.") }
+                if settings.notificationsDenied { notificationsDeniedRow }
+                if model.hasSwapPressure { swapCard }
+                ForEach(Array(rankedGroups.prefix(4).enumerated()), id: \.element.id) { index, group in
+                    CulpritCard(
+                        group: group,
+                        crowned: index == 0 && group.isHot,
+                        isClosing: closingID == group.id && model.isActing,
+                        disabled: model.isStale || model.isActing,
+                        close: {
+                            closingID = group.id
+                            Task { await model.closeGroupNow(group) }
+                        },
+                        leaveIt: { model.snoozeGroup(group.id) }
+                    )
+                    .hoverLift()
                 }
-                ForEach(Array(model.groups.prefix(4).enumerated()), id: \.element.id) { index, group in
-                    if index > 0 { Divider() }
-                    MenuFindingRow(group: group) {
-                        openMain(.now)
-                        Task { await model.requestProcessReview([group]) }
-                    }
-                    .disabled(model.isStale || model.isReviewing)
-                }
-                if model.groups.count > 4 {
-                    Button("View \(model.groups.count - 4) more groups in MacHogs") { openMain(.now) }
+                if rankedGroups.count > 4 {
+                    Button("View \(rankedGroups.count - 4) more groups in MacHogs") { openMain(.now) }
                         .buttonStyle(.link)
+                }
+                if rankedGroups.count >= 2 {
+                    Button {
+                        closingID = "ALL"
+                        Task { await model.closeEverythingNow() }
+                    } label: {
+                        if closingID == "ALL" && model.isActing {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Closing…")
+                            }.frame(maxWidth: .infinity)
+                        } else {
+                            Text("Close everything 🧹").frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(PigActionStyle(tint: .pink))
+                    .disabled(model.isStale || model.isActing)
+                    .accessibilityLabel("Close everything MacHogs found")
                 }
             }
         }
+    }
+
+    private var notificationsDeniedRow: some View {
+        HStack(spacing: 6) {
+            Label("Shoulder taps are blocked in System Settings.", systemImage: "bell.slash")
+                .font(.caption).foregroundStyle(.orange)
+            Spacer()
+            Button("Fix") { settings.openNotificationSettings() }
+                .buttonStyle(.link).font(.caption)
+                .accessibilityLabel("Open notification settings for MacHogs")
+        }
+    }
+
+    // The one problem closing programs cannot fix.
+    private var swapCard: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text("🌡️").font(.system(size: 16)).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Out of fast memory.")
+                        .font(.system(.callout, design: .rounded).weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("Only a restart truly fixes this.")
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+                ArmedPill(idle: "Restart now ⏻", armedTitle: "Sure? Everything closes ⏻",
+                          tint: .indigo) { model.restartMac() }
+            }
+            Text("Memory is so full macOS is using the disk as scratch paper — that's the slowness you feel. Closing leftovers barely helps once it starts.")
+                .font(.system(.caption, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(LinearGradient(colors: [Color(red: 0.72, green: 0.48, blue: 0.10),
+                                              Color(red: 0.55, green: 0.38, blue: 0.12)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing)))
     }
 
     @ViewBuilder private var storageView: some View {
@@ -299,27 +381,37 @@ struct MenuBarView: View {
         return "\(megabytes) MB"
     }
 
+    private var rankedGroups: [FindingGroup] {
+        model.groups.sorted {
+            if $0.totalCPU != $1.totalCPU { return $0.totalCPU > $1.totalCPU }
+            return $0.count > $1.count
+        }
+    }
+
     private var hogsTabTitle: String {
         let count = model.groups.reduce(0) { $0 + $1.count }
-        return count == 0 ? "Hogs" : "Hogs \(count)"
+        return count == 0 ? "Hogs" : "Hogs · \(count)"
     }
     private var storageTabTitle: String {
         guard let report = model.diskReport else { return model.isLoadingDisk ? "Storage …" : "Storage" }
         let safe = report.items.filter { $0.verdict == "safe" }
-        return safe.isEmpty ? "Storage" : "Storage \(storageAmount(safe))"
+        return safe.isEmpty ? "Storage" : "Storage · \(storageAmount(safe))"
     }
     private var portsTabTitle: String {
         guard let report = model.portsReport else { return model.isLoadingPorts ? "Ports …" : "Ports" }
         let count = report.ports.filter(\.isClosable).count
-        return count == 0 ? "Ports" : "Ports \(count)"
+        return count == 0 ? "Ports" : "Ports · \(count)"
     }
     private var headerDetail: String {
         switch workspace {
         case .hogs:
             if model.hasSwapPressure { return "A restart is the honest next step" }
-            if model.hasHotFinding { return "An app is making your Mac work hard" }
-            if !model.groups.isEmpty { return "Apps left background work behind" }
-            return model.report == nil ? "Checking what apps left behind…" : "Nothing abandoned right now"
+            if let top = rankedGroups.first {
+                if top.isHot { return "\(top.owner) is making your Mac work hard" }
+                let count = model.groups.reduce(0) { $0 + $1.count }
+                return "\(top.owner) and friends left \(count) thing\(count == 1 ? "" : "s") running"
+            }
+            return model.report == nil ? "Checking what apps left behind…" : "All quiet. Working only for you."
         case .storage: return "Safe cache, measured on demand"
         case .ports: return "Who is using your local ports"
         }
@@ -355,24 +447,100 @@ struct MenuBarView: View {
     }
 }
 
-private struct MenuFindingRow: View {
+private struct CulpritCard: View {
     let group: FindingGroup
-    let review: () -> Void
+    let crowned: Bool
+    let isClosing: Bool
+    let disabled: Bool
+    let close: () -> Void
+    let leaveIt: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(group.owner).font(.callout.bold())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                if crowned { Text("👑").accessibilityLabel("Worst offender") }
+                Text(group.owner).font(.callout.bold()).lineLimit(1)
+                if group.count > 1 {
+                    Text("×\(group.count)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .accessibilityLabel("\(group.count) copies")
+                }
                 Spacer()
-                Text("\(group.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                heatChip
             }
             Text(group.story).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-            Button(action: review) {
-                Label("Review in MacHogs…", systemImage: "arrow.up.forward.app")
+            HStack(spacing: 10) {
+                Button(action: close) {
+                    if isClosing {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.mini)
+                            Text("Closing…")
+                        }
+                    } else {
+                        Text("Close it 💥")
+                    }
+                }
+                .buttonStyle(PigActionStyle(tint: .pink))
+                .disabled(disabled)
+                .accessibilityLabel("Close \(group.count) items left by \(group.owner)")
+                Button("Leave it", action: leaveIt)
+                    .buttonStyle(.link).font(.caption)
+                    .accessibilityLabel("Leave \(group.owner) alone for an hour")
+                Spacer()
             }
-            .buttonStyle(.link)
-                .accessibilityLabel("Review \(group.count) items left by \(group.owner) in MacHogs")
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+    }
+
+    private var heatChip: some View {
+        let cores = group.totalCPU / 100
+        let text: String
+        let tint: Color
+        if cores >= 0.95 {
+            text = String(format: "🔥 %.1f cores", cores)
+            tint = .red
+        } else if group.isHot {
+            text = "warm"
+            tint = .orange
+        } else {
+            text = "idle"
+            tint = .secondary
+        }
+        return Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .accessibilityLabel("Using \(String(format: "%.1f", cores)) of a CPU core")
+    }
+}
+
+private struct ArmedPill: View {
+    let idle: String
+    let armedTitle: String
+    let tint: Color
+    let fire: () -> Void
+    @State private var armed = false
+
+    var body: some View {
+        Button {
+            if armed {
+                armed = false
+                fire()
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { armed = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { armed = false }
+                }
+            }
+        } label: {
+            Text(armed ? armedTitle : idle)
+        }
+        .buttonStyle(PigActionStyle(tint: armed ? .red : tint))
+        .accessibilityLabel(armed ? "Tap again to restart your Mac" : "Restart your Mac")
     }
 }
 

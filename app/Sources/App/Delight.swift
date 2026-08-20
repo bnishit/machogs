@@ -6,10 +6,19 @@ enum MachogsSound {
     private static var lastPlayed = Date.distantPast
 
     static func pop(enabled: Bool = true) {
+        play("Pop", enabled: enabled)
+    }
+
+    /// The bigger "win" chime — disk space recovered.
+    static func win(enabled: Bool = true) {
+        play("Glass", enabled: enabled)
+    }
+
+    private static func play(_ name: String, enabled: Bool) {
         guard enabled else { return }
         guard Date().timeIntervalSince(lastPlayed) > 0.2 else { return }
         lastPlayed = Date()
-        if NSSound(named: NSSound.Name("Pop"))?.play() != true { NSSound.beep() }
+        if NSSound(named: NSSound.Name(name))?.play() != true { NSSound.beep() }
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
     }
 }
@@ -125,6 +134,26 @@ struct ConfettiBurst: View {
             withAnimation(.easeOut(duration: 0.18)) { active = false }
         }
     }
+}
+
+// Cards lift toward the cursor.
+struct HoverLift: ViewModifier {
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hovering && !reduceMotion ? 1.015 : 1)
+            .shadow(color: .black.opacity(hovering ? 0.16 : 0.05),
+                    radius: hovering ? 8 : 3, y: hovering ? 4 : 1)
+            .onHover { h in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { hovering = h }
+            }
+    }
+}
+
+extension View {
+    func hoverLift() -> some View { modifier(HoverLift()) }
 }
 
 private struct JoyRevealModifier: ViewModifier {
