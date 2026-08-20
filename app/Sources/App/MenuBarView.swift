@@ -302,9 +302,8 @@ struct MenuBarView: View {
                 } else {
                     ForEach(items.prefix(6)) { item in
                         Divider()
-                        MenuPortRow(item: item, disabled: model.isReviewing || model.pendingReview != nil) {
-                            openMain(.ports)
-                            Task { await model.requestPortReview(item) }
+                        MenuPortRow(item: item, disabled: model.isActing) {
+                            Task { await model.closePortNow(item) }
                         }
                     }
                 }
@@ -564,7 +563,7 @@ private struct MenuPortRow: View {
             Spacer()
             if item.isClosable {
                 Button(action: review) {
-                    Label("Free…", systemImage: "bolt.fill")
+                    Label("Free 💥", systemImage: "bolt.fill")
                 }
                     .buttonStyle(PigActionStyle(tint: .pink))
                     .disabled(disabled)

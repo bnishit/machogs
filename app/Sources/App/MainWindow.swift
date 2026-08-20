@@ -197,17 +197,17 @@ struct NowPage: View {
                             Text("\(model.groups.reduce(0) { $0 + $1.count }) items can be closed")
                                 .font(.callout).foregroundStyle(.secondary)
                             Spacer()
-                            Button("Close \(model.groups.reduce(0) { $0 + $1.count }) unused things…") {
-                                Task { await model.requestProcessReview(model.groups) }
+                            Button("Close \(model.groups.reduce(0) { $0 + $1.count }) unused things 💥") {
+                                Task { await model.closeEverythingNow() }
                             }
-                            .disabled(model.isStale || model.isReviewing)
+                            .disabled(model.isStale || model.isActing)
                         }
                         .padding(.bottom, 10)
                     }
                     ForEach(Array(model.groups.enumerated()), id: \.element.id) { index, group in
                         if index > 0 { Divider() }
-                        FindingRow(group: group, disabled: model.isStale || model.isReviewing) {
-                            Task { await model.requestProcessReview([group]) }
+                        FindingRow(group: group, disabled: model.isStale || model.isActing) {
+                            Task { await model.closeGroupNow(group) }
                         }
                     }
                 }
@@ -338,7 +338,7 @@ struct FindingRow: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Button("Close \(group.count) safely…", action: review)
+            Button("Close \(group.count) 💥", action: review)
                 .disabled(disabled)
         }
         .padding(.vertical, 12)
@@ -393,7 +393,8 @@ struct PortSection: View {
                             }
                             Spacer()
                             if item.isClosable {
-                                Button("Free port \(item.port)…") { Task { await model.requestPortReview(item) } }
+                                Button("Free port \(item.port) 💥") { Task { await model.closePortNow(item) } }
+                                    .disabled(model.isActing)
                             } else {
                                 Label(item.protected ? "Active work — protected" : "Managed by macOS", systemImage: "lock.shield")
                                     .font(.caption).foregroundStyle(.secondary)

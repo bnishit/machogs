@@ -209,6 +209,42 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// One-tap port free: same engine re-verification as the review flow,
+    /// no modal in between.
+    public func closePortNow(_ item: PortItem) async {
+        guard item.isClosable, !isActing else { return }
+        isActing = true
+        defer { isActing = false }
+        do {
+            let fresh = try await service.inspectPort(item.port)
+            guard fresh.ports.contains(where: {
+                $0.pid == item.pid && $0.identity == item.identity && $0.isClosable
+            }) else {
+                receipt = CleanupReceipt(closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
+                                         message: "The listener changed after the scan. Nothing was closed.",
+                                         kind: .port)
+                return
+            }
+            let result = try await service.closePort(
+                PortTarget(port: item.port, pid: item.pid, identity: item.identity)
+            )
+            let action = result.ports.first?.action
+            let message: String
+            switch action {
+            case "killed": message = "Port \(item.port) is free. Machogs closed \(item.process)."
+            case "refused-protected": message = "Left alone. The listener now belongs to a protected live session."
+            case "identity-changed", nil: message = "The listener changed after review. Nothing was closed."
+            default: message = "Machogs could not free port \(item.port). Nothing else was closed."
+            }
+            receipt = CleanupReceipt(closedCount: action == "killed" ? 1 : 0, cpuFreed: 0,
+                                     cpuSecondsAlreadyUsed: 0, message: message,
+                                     isSuccess: action == "killed", canShare: false, kind: .port)
+            await loadPorts()
+        } catch {
+            portsError = error.localizedDescription
+        }
+    }
+
     public func requestDiskReview(_ item: DiskItem) {
         guard item.verdict == "safe", !isActing else { return }
         pendingReview = ActionReview(kind: .disk(item), checkedAt: Date())
