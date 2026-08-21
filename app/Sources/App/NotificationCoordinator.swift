@@ -56,7 +56,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
                                 didReceive response: UNNotificationResponse) async {
         let values = response.notification.request.content.userInfo["targets"] as? [String] ?? []
         var components = URLComponents()
-        components.scheme = "machogs"
+        components.scheme = MachogsBuild.urlScheme
         components.host = response.actionIdentifier == "CLOSE" ? "close" : "now"
         components.queryItems = values.map { URLQueryItem(name: "target", value: $0) }
         if let url = components.url { NSWorkspace.shared.open(url) }

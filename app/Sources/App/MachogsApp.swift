@@ -3,6 +3,16 @@ import Combine
 import MachogsCore
 import SwiftUI
 
+enum MachogsBuild {
+    static var displayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Machogs"
+    }
+
+    static var urlScheme: String {
+        Bundle.main.bundleIdentifier == "com.bnishit.machogs.dev" ? "machogs-dev" : "machogs"
+    }
+}
+
 @main
 struct MachogsApp: App {
     @StateObject private var model: AppModel
@@ -22,7 +32,7 @@ struct MachogsApp: App {
     }
 
     var body: some Scene {
-        Window("Machogs", id: "main") {
+        Window(MachogsBuild.displayName, id: "main") {
             Group {
                 if settings.onboardingComplete {
                     MainWindow(model: model, settings: settings, router: router)
@@ -65,7 +75,7 @@ struct MachogsApp: App {
     }
 
     private func handleURL(_ url: URL) {
-        guard url.scheme == "machogs" else { return }
+        guard url.scheme == MachogsBuild.urlScheme else { return }
         let targets = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
             .filter { $0.name == "target" }
             .compactMap { item -> ProcessTarget? in
