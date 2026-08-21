@@ -9,6 +9,7 @@ public protocol MachogsServing: Sendable {
     func closePort(_ target: PortTarget) async throws -> PortsReport
     func inspectDisk() async throws -> DiskReport
     func clearDisk(path: String) async throws -> DiskClearResult
+    func inspectMemory() async throws -> MemoryReport
     func shareCard() async throws -> String
 }
 
@@ -101,6 +102,10 @@ public struct MachogsClient: MachogsServing {
 
     public func inspectDisk() async throws -> DiskReport {
         try await decode(["disk", "--json"], as: DiskReport.self)
+    }
+
+    public func inspectMemory() async throws -> MemoryReport {
+        try await decode(["memory", "--json"], as: MemoryReport.self)
     }
 
     public func clearDisk(path: String) async throws -> DiskClearResult {

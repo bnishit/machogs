@@ -86,6 +86,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var diskError: String?
     @Published public private(set) var isLoadingDisk = false
     @Published public private(set) var lastSuccessfulDiskScan: Date?
+    @Published public private(set) var memoryReport: MemoryReport?
+    @Published public private(set) var memoryError: String?
+    @Published public private(set) var isLoadingMemory = false
+    @Published public private(set) var lastSuccessfulMemoryScan: Date?
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
     private let service: any MachogsServing
@@ -150,6 +154,18 @@ public final class AppModel: ObservableObject {
             lastSuccessfulDiskScan = Date()
         }
         catch { diskError = error.localizedDescription }
+    }
+
+    public func loadMemory() async {
+        guard !isLoadingMemory else { return }
+        isLoadingMemory = true
+        memoryError = nil
+        defer { isLoadingMemory = false }
+        do {
+            memoryReport = try await service.inspectMemory()
+            lastSuccessfulMemoryScan = Date()
+        }
+        catch { memoryError = error.localizedDescription }
     }
 
     public func requestProcessReview(_ groups: [FindingGroup]) async {
@@ -359,8 +375,11 @@ public final class AppModel: ObservableObject {
         if protected > 0 { parts.append("\(protected) became protected and was left alone.") }
         if failed > 0 { parts.append("\(failed) could not be closed.") }
         if parts.isEmpty { parts.append("Already gone. Nothing to close.") }
+        let memory = killed.reduce(0) { $0 + $1.memoryMB }
         if cpu >= 20 {
             parts.append("Freed about \(String(format: "%.1f", cpu / 100)) of a CPU core.")
+        } else if memory >= 100 {
+            parts.append("Got back \(mbText(memory)) of memory.")
         } else if !killed.isEmpty {
             parts.append("They were wasting memory, not heating your Mac.")
         }

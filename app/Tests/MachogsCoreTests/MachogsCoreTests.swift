@@ -248,17 +248,144 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertTrue(fake.closedPortTargets.isEmpty)
     }
 
-    private func fixture(_ findings: [String], mode: String = "report", killed: Int = 0) throws -> EngineReport {
+
+    func testFindingWithoutMemoryKeyStillDecodes() throws {
+        // an older engine on the PATH emits no memory_mb — its reports must
+        // keep parsing, with memory read as simply unknown
+        let report = try fixture([finding(pid: 10, identity: "a")])
+        XCTAssertEqual(report.findings.first?.memoryMB, 0)
+    }
+
+    func testFindingCarriesMemoryWhenTheEngineSaysIt() throws {
+        let report = try fixture([finding(pid: 10, identity: "a", memoryMB: 7102)])
+        XCTAssertEqual(report.findings.first?.memoryMB, 7102)
+    }
+
+    func testGroupAddsUpMemoryAcrossMembers() throws {
+        let report = try fixture([
+            finding(pid: 10, identity: "a", memoryMB: 700),
+            finding(pid: 11, identity: "b", memoryMB: 500),
+            finding(pid: 12, identity: "c")
+        ])
+        XCTAssertEqual(report.groups.first?.totalMemoryMB, 1200)
+        XCTAssertEqual(report.groups.first?.memoryText, "1.2 GB")
+    }
+
+    func testWatchdogCloneRuleRefiresAsTheArmyGrows() throws {
+        // The old rule was edge-triggered on crossing 8 and then watched a
+        // swarm grow 8 -> 49 in silence. Growth must re-arm it.
+        let clock = TestClock()
+        var policy = WatchdogPolicy(cooldown: 30 * 60, now: { clock.now })
+        func swarm(_ n: Int) throws -> EngineReport {
+            try fixture((1...n).map { finding(pid: $0, identity: "id\($0)", cpu: 0) })
+        }
+        _ = policy.evaluate(try fixture([]))
+        var fired = 0
+        for count in [8, 20, 49] {
+            clock.now += 31 * 60
+            if policy.evaluate(try swarm(count))?.kind == .clones { fired += 1 }
+        }
+        XCTAssertEqual(fired, 3, "each growth step past the last notification deserves its own tap")
+        clock.now += 31 * 60
+        XCTAssertNil(policy.evaluate(try swarm(49)), "no growth, no nag")
+    }
+
+    func testWatchdogCloneRuleStillRespectsCooldown() throws {
+        let clock = TestClock()
+        var policy = WatchdogPolicy(cooldown: 30 * 60, now: { clock.now })
+        func swarm(_ n: Int) throws -> EngineReport {
+            try fixture((1...n).map { finding(pid: $0, identity: "id\($0)", cpu: 0) })
+        }
+        _ = policy.evaluate(try fixture([]))
+        clock.now += 31 * 60
+        XCTAssertEqual(policy.evaluate(try swarm(8))?.kind, .clones)
+        clock.now += 60
+        XCTAssertNil(policy.evaluate(try swarm(20)), "growth inside the cooldown stays quiet")
+    }
+
+    // The whole point of report-only: a memory hog can be big enough to tap a
+    // shoulder about and still never reach anything that closes it. A fat idle
+    // process is as often an editor holding unsaved work as it is a leak.
+    func testMemoryHogIsNeverOfferedForClosing() throws {
+        let report = try fixture([finding(pid: 10, identity: "a", action: "report-only", cpu: 0, memoryMB: 7102)])
+        XCTAssertTrue(report.actionableFindings.isEmpty, "a hoarder must not be reapable")
+        XCTAssertTrue(report.groups.isEmpty, "and must not reach the kill flows")
+        XCTAssertEqual(report.memoryGroups.count, 1, "but the watchdog still sees it")
+        XCTAssertEqual(report.memoryGroups.first?.totalMemoryMB, 7102)
+    }
+
+    func testWatchdogTapsAFatIdleGroupWhenSwapIsHigh() throws {
+        let clock = TestClock()
+        var policy = WatchdogPolicy(cooldown: 30 * 60, now: { clock.now })
+        let hog = try fixture([finding(pid: 10, identity: "a", action: "report-only", cpu: 0, memoryMB: 7102)], swapPct: 92)
+        XCTAssertNil(policy.evaluate(hog), "first poll is only a baseline")
+        clock.now += 31 * 60
+        let event = policy.evaluate(hog)
+        XCTAssertEqual(event?.kind, .memory)
+        XCTAssertEqual(event?.title, "Found what's eating your memory")
+        clock.now += 31 * 60
+        XCTAssertNil(policy.evaluate(hog), "the same hog should not nag every poll")
+    }
+
+    func testWatchdogIgnoresAMerelyLargeGroupWhenSwapIsCalm() throws {
+        let clock = TestClock()
+        var policy = WatchdogPolicy(cooldown: 30 * 60, now: { clock.now })
+        let hog = try fixture([finding(pid: 10, identity: "a", action: "report-only", cpu: 0, memoryMB: 1400)], swapPct: 20)
+        _ = policy.evaluate(hog)
+        clock.now += 31 * 60
+        XCTAssertNil(policy.evaluate(hog), "1.4 GB with no swap pressure is a curiosity, not an emergency")
+    }
+
+    func testMemoryRollupDecodesAndRanksApps() throws {
+        let report = try memoryReportFixture()
+        XCTAssertEqual(report.apps.map(\.app), ["ChatGPT", "Xcode"])
+        XCTAssertEqual(report.apps[0].memoryMB, 10074)
+        XCTAssertEqual(report.apps[0].coldPercent, 93)
+        XCTAssertEqual(report.apps[0].biggestProcess?.name, "codex")
+        XCTAssertEqual(report.apps[0].biggestProcess?.memoryText, "6.9 GB")
+        XCTAssertEqual(report.host.swapPercent, 92)
+        XCTAssertEqual(report.hoardingApps.map(\.app), ["ChatGPT"])
+    }
+
+    func testHoardingRuleFiresOnColdMemoryNotOnSize() {
+        // the incident: 94% of the footprint compressed away = sitting on garbage
+        XCTAssertTrue(MemoryApp.isHoarding(memoryMB: 10074, compressedMB: 9421, processCount: 3))
+        // the false-positive that must NOT fire: Xcode mid-build, huge but warm
+        XCTAssertFalse(MemoryApp.isHoarding(memoryMB: 9800, compressedMB: 500, processCount: 6))
+        // 100 processes is damning on its own, warm or not
+        XCTAssertTrue(MemoryApp.isHoarding(memoryMB: 5000, compressedMB: 500, processCount: 100))
+        // small and cold is just a well-behaved idle app
+        XCTAssertFalse(MemoryApp.isHoarding(memoryMB: 900, compressedMB: 850, processCount: 2))
+    }
+
+    private func fixture(_ findings: [String], mode: String = "report", killed: Int = 0, swapPct: Int = 10) throws -> EngineReport {
         let data = """
-        {"mode":"\(mode)","host":{"load":1.5,"cores":8,"swap_used_mb":10,"swap_total_mb":100,"swap_pct":10,"uptime_days":2},"summary":{"reapable":\(findings.count),"killed":\(killed)},"findings":[\(findings.joined(separator: ","))]}
+        {"mode":"\(mode)","host":{"load":1.5,"cores":8,"swap_used_mb":10,"swap_total_mb":100,"swap_pct":\(swapPct),"uptime_days":2},"summary":{"reapable":\(findings.count),"killed":\(killed)},"findings":[\(findings.joined(separator: ","))]}
         """.data(using: .utf8)!
         return try JSONDecoder().decode(EngineReport.self, from: data)
     }
 
-    private func finding(pid: Int, identity: String, action: String = "reapable", owner: String = "ChatGPT", what: String = "browser helper", story: String = "ChatGPT left a helper behind.", cpu: Double = 0) -> String {
+    // memoryMB is nil by default so most fixtures look like an OLDER engine's
+    // JSON (no memory_mb key) — decoding them at all IS the back-compat test.
+    private func finding(pid: Int, identity: String, action: String = "reapable", owner: String = "ChatGPT", what: String = "browser helper", story: String = "ChatGPT left a helper behind.", cpu: Double = 0, memoryMB: Int? = nil) -> String {
+        let memory = memoryMB.map { ",\"memory_mb\":\($0)" } ?? ""
+        return """
+        {"pid":\(pid),"identity":"\(identity)","section":"2","action":"\(action)","cpu":\(cpu),"cpu_seconds":12,"age":"01:00:00","owner":"\(owner)","what":"\(what)","detail":"orphaned helper","story":"\(story)"\(memory)}
         """
-        {"pid":\(pid),"identity":"\(identity)","section":"2","action":"\(action)","cpu":\(cpu),"cpu_seconds":12,"age":"01:00:00","owner":"\(owner)","what":"\(what)","detail":"orphaned helper","story":"\(story)"}
-        """
+    }
+
+    private func memoryReportFixture() throws -> MemoryReport {
+        let data = """
+        {"mode":"memory","host":{"load":4.0,"cores":10,"swap_used_mb":17934,"swap_total_mb":19456,"swap_pct":92,"uptime_days":24},
+         "apps":[
+          {"app":"ChatGPT","memory_mb":10074,"compressed_mb":9421,"cold_pct":93,"processes":100,"oldest_age":"2 days","hoarding":true,
+           "procs":[{"pid":98965,"name":"codex","memory_mb":7102,"compressed_mb":6664,"age":"2 days"},
+                    {"pid":98978,"name":"Codex Renderer","memory_mb":2370,"compressed_mb":2226,"age":"2 days"}]},
+          {"app":"Xcode","memory_mb":9800,"compressed_mb":500,"cold_pct":5,"processes":6,"oldest_age":"1 hour","hoarding":false,
+           "procs":[{"pid":510,"name":"Xcode","memory_mb":9800,"compressed_mb":500,"age":"1 hour"}]}
+        ]}
+        """.data(using: .utf8)!
+        return try JSONDecoder().decode(MemoryReport.self, from: data)
     }
 
     private func diskFixture(freedMB: Int) throws -> (report: DiskReport, item: DiskItem, result: DiskClearResult) {
@@ -287,6 +414,11 @@ final class MachogsCoreTests: XCTestCase {
     }
 }
 
+/// A hand-cranked clock so cooldown behaviour is tested, not slept through.
+private final class TestClock: @unchecked Sendable {
+    var now = Date(timeIntervalSinceReferenceDate: 0)
+}
+
 private final class FakeService: MachogsServing, @unchecked Sendable {
     var scanReport: EngineReport
     var planReport: EngineReport
@@ -297,6 +429,7 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     var diskClearResult: DiskClearResult?
     var portsReport: PortsReport?
     var portsError: Error?
+    var memoryReport: MemoryReport?
     var inspectedPorts: [Int] = []
     var closedPortTargets: [PortTarget] = []
     var portInspectionDelayNanoseconds: UInt64 = 0
@@ -336,6 +469,10 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
         closedPortTargets.append(target)
         guard let portsReport else { throw MachogsClientError.invalidResponse }
         return portsReport
+    }
+    func inspectMemory() async throws -> MemoryReport {
+        guard let memoryReport else { throw MachogsClientError.invalidResponse }
+        return memoryReport
     }
     func inspectDisk() async throws -> DiskReport {
         if let diskError { throw diskError }

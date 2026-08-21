@@ -9,6 +9,7 @@
 #   machogs blame           scoreboard: which app leaves the most junk behind
 #   machogs brag            a shareable card of what your Mac has wasted
 #   machogs disk            where your storage went (report-only, deletes nothing)
+#   machogs memory          which APPS hold your memory, and who is hoarding it
 #   machogs ports           every port in use and what is squatting it
 #   machogs port 3000       who holds port 3000;  add `kill` to free it
 #   machogs --details       the technical report, by category
@@ -49,8 +50,24 @@ HOT_CPU=${HOT_CPU:-50}                 # %CPU above which a process counts as ho
 SPIN_CPU_SECONDS=${SPIN_CPU_SECONDS:-14400}  # 4h CPU + hot now = stuck, not busy
 ORPHAN_MIN_SECONDS=${ORPHAN_MIN_SECONDS:-300} # an orphan must have lasted 5 min
 IDLE_SESSION_MINS=180      # a Claude Code session idle this long gets flagged
-# Processes that legitimately pin a core for hours. Matched against ucomm.
-NEVER_SPIN="WindowServer|kernel_task|launchd|ffmpeg|HandBrake|Compressor|backupd|mds|mds_stores|mdworker|photoanalysisd"
+# Memory thresholds. `ps -o rss` is deliberately never used here: the process
+# that motivated these held 7,102 MB while its RSS read 357 MB — macOS had
+# compressed the rest out to disk, where ps cannot see it but your Mac still
+# pays for it. phys_footprint (top's MEM column) is the number Activity
+# Monitor and the Force Quit dialog show, so it is the number used here.
+MEM_HOG_MB=${MEM_HOG_MB:-1024}         # one idle process holding this much is a hog
+MEM_HOG_MAX_CPU=${MEM_HOG_MAX_CPU:-5}  # above this %CPU it is working, not hoarding
+MEM_HOG_MIN_SECONDS=${MEM_HOG_MIN_SECONDS:-3600} # young processes get an hour of grace
+CLONE_COUNT=${CLONE_COUNT:-8}          # same-named siblings before they are an army
+MEM_APP_MB=${MEM_APP_MB:-4096}         # a whole APP worth flagging in `machogs memory`
+MEM_COLD_PCT=${MEM_COLD_PCT:-60}       # this much of it compressed cold = hoarding
+MEM_COLD_MARGIN=${MEM_COLD_MARGIN:-15} # ...and this far above the machine baseline
+MEM_APP_PROCS=${MEM_APP_PROCS:-20}     # or simply this many processes for one app
+# Processes that legitimately pin a core for hours — or, for the memory
+# sections, legitimately hold gigabytes: a virtual machine's footprint IS the
+# guest's RAM, and closing one can lose unsaved work inside it. Matched
+# against ucomm.
+NEVER_SPIN="WindowServer|kernel_task|launchd|ffmpeg|HandBrake|Compressor|backupd|mds|mds_stores|mdworker|photoanalysisd|com.apple.Virtua|qemu|Docker|com.docker"
 ZOMBIE_APPS=("Cursor" "Code" "Electron")   # apps that leak helpers after quitting
 # process patterns treated as "MCP / automation servers"
 MCP_PATTERNS="playwright-mcp|@playwright/mcp|mcp-server-|/mcp/server\.(c|m)?js|modelcontextprotocol"
@@ -72,12 +89,13 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; MEMORY=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
     plan)        MODE=plan ;;
     ports|port)  PORTS=1 ;;
+    memory)      MEMORY=1 ;;
     fix)         MODE=fix ;;
     blame)       MODE=blame ;;
     brag)        MODE=brag ;;
@@ -100,7 +118,7 @@ for a in "$@"; do
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
     --details)   DETAILS=1 ;;
-    -h|--help)   sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -140,8 +158,10 @@ trap 'rm -f "$ROWS" "$GRP"' EXIT
 
 # row <pid> <category> <action> <cpu> <age> <detail>
 # Tab-separated. Nothing here may contain a tab or newline; the fields are all
-# pids, numbers, and process names, so that holds.
-row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$(cputime_of "$1")" "$(identity_of "$1")" >> "$ROWS"; }
+# pids, numbers, and process names, so that holds. New fields are append-only:
+# readers that stop at identity keep working, because in `read` the last
+# variable swallows the remainder and none of them use identity's tail.
+row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$(cputime_of "$1")" "$(identity_of "$1")" "$(footprint_of "$1")" >> "$ROWS"; }
 
 # Total CPU seconds this process has consumed since it started.
 cputime_of() { cpusecs "$(ps -o time= -p "$1" 2>/dev/null | tr -d ' ')"; }
@@ -217,7 +237,9 @@ count_unit() {
   local d; d=$(printf '%s' "${1:-0}" | tr -cd '0-9'); [ -n "$d" ] || d=0
   local n=$((10#$d)) u=$2
   [ "$n" -eq 1 ] && { echo "1 $u"; return; }
-  echo "$n ${u}s"
+  # "process" pluralises with -es, and "2 processs" reads like a typo the
+  # person will trust less than the number next to it
+  case "$u" in *s|*x|*ch|*sh) echo "$n ${u}es" ;; *) echo "$n ${u}s" ;; esac
 }
 
 # "04-01:37:50" (4 days) or "01:29:07" (1.5 hours) -> words.
@@ -241,6 +263,8 @@ why_line() {
     2b) echo "A duplicate. One app started the same helper many times over." ;;
     3)  echo "A hidden browser window nobody is looking at." ;;
     4)  echo "The app was closed, but this piece of it stayed behind." ;;
+    6)  echo "It is not working — just sitting on a big block of memory." ;;
+    6b) echo "Each copy is small. Together they add up to real memory." ;;
     *)  echo "" ;;
   esac
 }
@@ -265,17 +289,21 @@ burned() {
 # CPU seconds -> whole phone charges (see the note in receipt for the math).
 phone_charges() { awk -v s="${1:-0}" 'BEGIN{printf "%d", s/9000}'; }
 
+# 7102 -> "6.9 GB". 512 -> "512 MB". Megabytes are the working unit everywhere
+# else in this file; gigabytes only appear here, at the moment of speaking.
+mem_words() { awk -v m="${1:-0}" 'BEGIN{ if (m >= 1024) printf "%.1f GB", m/1024; else printf "%d MB", m }'; }
+
 article() {
   local a="A"; [ "${2:-}" = lower ] && a="a"
   case "$1" in [AaEeIiOoUu]*) echo "${a}n" ;; *) echo "$a" ;; esac
 }
 
-# story <sec> <what> <owner> <count> <cpu> <age> <cpusecs>
+# story <sec> <what> <owner> <count> <cpu> <age> <cpusecs> [memMB]
 # Always ends up capitalised — the owner can legitimately be "a Claude Code
 # plugin", which would otherwise start the sentence in lower case.
 story() { _story "$@" | awk '{ print toupper(substr($0,1,1)) substr($0,2) }' | tr -d '\n'; }
 _story() {
-  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6 csec=$7
+  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6 csec=$7 mem=${8:-0}
   [ "$owner" = "-" ] && owner=""
   if [ "$sec" = "5" ]; then
     printf 'One of your live Claude Code sessions, running %s. Never closed by this tool.' \
@@ -284,6 +312,25 @@ _story() {
   fi
   local who="Something"; [ -n "$owner" ] && who="$owner"
   local ci=${cpu%.*}
+
+  # Memory findings never reach the CPU sentences below: a hog is by
+  # definition idle, so "burned N seconds" would be a punchline about nothing.
+  # The memory amount IS the story.
+  if [ "$sec" = "6" ]; then
+    if [ -n "$owner" ]; then
+      printf '%s left %s %s sitting on %s of memory for %s without doing anything.' \
+        "$who" "$(article "$what" lower)" "$what" "$(mem_words "$mem")" "$(plain_age "$age")"
+    else
+      printf '%s %s has been sitting on %s of memory for %s without doing anything.' \
+        "$(article "$what")" "$what" "$(mem_words "$mem")" "$(plain_age "$age")"
+    fi
+    return
+  fi
+  if [ "$sec" = "6b" ]; then
+    printf '%s kept starting copies of the same %s and never cleaned any up. Each one is small; the pile is eating your memory.' \
+      "$who" "$what"
+    return
+  fi
 
   if [ "${ci:-0}" -ge 20 ]; then
     # the headline case: it is on fire, and the burned total is the punchline
@@ -342,13 +389,14 @@ receipt() {
 # the same leaked helper is one problem, not seven, and reading it seven times
 # teaches the person nothing.
 say_group() {
-  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6
+  local sec=$1 what=$2 owner=$3 count=$4 cpu=$5 age=$6 mem=${7:-0}
   [ "$owner" = "-" ] && owner=""
   local ci=${cpu%.*}
   # one glyph says what kind of problem this is before a word is read:
-  # burning a core, a pile of clones, or just something asleep in the corner
+  # burning a core, a pile of clones, a memory hog, or just asleep in a corner
   local mark="$E_ZZZ"
   [ "$count" -gt 1 ] && mark="$E_CLONE"
+  [ "${mem:-0}" -ge "$MEM_HOG_MB" ] && mark="$E_PIG"
   [ "${ci:-0}" -ge 20 ] && mark="$E_FIRE"
   local head="$what"
   [ "$count" -gt 1 ] && head="$what ${DIM}× ${count}${NC}"
@@ -359,6 +407,13 @@ say_group() {
   fi
   if [ "${ci:-0}" -ge 20 ]; then
     echo "  Eating ${RED}${cpu}%${NC} of a CPU core. Running for $(plain_age "$age")."
+  elif [ "${mem:-0}" -ge "$MEM_HOG_MB" ]; then
+    # the amount is the whole point — "holding memory" undersells 7 GB
+    if [ "$count" -gt 1 ]; then
+      echo "  Together sitting on ${RED}$(mem_words "$mem")${NC} of memory. Oldest has sat there $(plain_age "$age")."
+    else
+      echo "  Sitting on ${RED}$(mem_words "$mem")${NC} of memory. Doing nothing for $(plain_age "$age")."
+    fi
   elif [ "$count" -gt 1 ]; then
     echo "  Idle, but holding memory. Oldest has sat there $(plain_age "$age")."
   else
@@ -396,6 +451,95 @@ targeted() {
 # ("6638:43.89" is 110 hours). Convert to whole seconds.
 cpusecs() { echo "${1:-0:0}" | awk -F: '{printf "%d", $1*60 + $2}'; }
 hms()     { awk -v s="$1" 'BEGIN{printf "%dh%02dm", s/3600, (s%3600)/60}'; }
+
+# ---- memory map ------------------------------------------------------------
+# One `top` sample, taken once and parsed into "pid footprintMB compressedMB"
+# lines. top costs one to two SECONDS per invocation, so it must never appear
+# inside a per-process loop the way the cheap ps lookups do — everything that
+# needs a memory number reads this map instead. top's MEM column is
+# phys_footprint, the figure Activity Monitor shows; its CMPRS column is the
+# slice macOS has compressed out because nothing touched it — the tell that a
+# process is hoarding, not working. Sorted biggest-first by top, which the
+# hog scan relies on to stop early. If top is missing or fails the map stays
+# empty, footprint_of answers 0 for everyone, and every memory feature
+# degrades to finding nothing rather than erroring.
+MEMMAP=""
+load_memmap() {
+  MEMMAP=$(top -l 1 -o mem -n 200 -stats pid,command,mem,cmprs 2>/dev/null | awk '
+    # values arrive suffixed (7102M, 1.2G, 512K, 0B) — normalise to whole MB
+    function mb(v) { sub(/[+-]$/, "", v)
+      if (v ~ /G/) return int(v * 1024)
+      if (v ~ /M/) return int(v + 0)
+      if (v ~ /K/) return int(v / 1024)
+      return 0 }
+    $1 ~ /^[0-9]+$/ && NF >= 4 { print $1, mb($(NF-1)), mb($NF) }')
+  # What fraction of ALL memory on this Mac is currently cold. Under real
+  # pressure macOS compresses indiscriminately, so at 82% swap the innocent
+  # apps sit at 83-93% cold too and an absolute "is it cold" test stops
+  # separating anyone. The baseline is what makes cold mean something again:
+  # what matters is being colder than everything else, not merely cold.
+  SYS_COLD=$(printf '%s\n' "$MEMMAP" | awk '{t+=$2; c+=$3}
+    END { p = (t > 0) ? int(c*100/t) : 0; print (p > 100) ? 100 : p }')
+}
+SYS_COLD=0
+footprint_of()  { printf '%s\n' "$MEMMAP" | awk -v p="${1:-0}" '$1==p {print $2; f=1; exit} END{if (!f) print 0}'; }
+compressed_of() { printf '%s\n' "$MEMMAP" | awk -v p="${1:-0}" '$1==p {print $3; f=1; exit} END{if (!f) print 0}'; }
+
+# Host vitals, shared by the main scan's System section and `machogs memory`.
+host_stats() {
+  cores=$(sysctl -n hw.ncpu)
+  # macOS: "load averages: 4.61 5.18 6.01" (space separated, no commas)
+  load=$(uptime | sed 's/.*load averages*: *//' | awk '{print $1}' | tr -d ',')
+  # macOS: "total = 16384.00M  used = 15131.31M  free = 1252.69M  (encrypted)"
+  swap_tot=$(sysctl -n vm.swapusage  | awk '{print $3}' | tr -d 'M')
+  swap_used=$(sysctl -n vm.swapusage | awk '{print $6}' | tr -d 'M')
+  swap_pct=$(awk -v u="${swap_used:-0}" -v t="${swap_tot:-1}" 'BEGIN{printf "%d", (u/t)*100}')
+}
+
+# An APP is hoarding when it is big and either most of its memory has gone
+# cold, or it has quietly piled up a crowd of processes. Cold is the honest
+# tell: memory being USED stays resident, memory being SAT ON gets compressed
+# away by macOS because nothing touches it — so a busy Xcode build (big but
+# warm) does not trip this, while the incident app sat at 94% cold.
+# Compressed can exceed footprint on virtual-machine processes (guest memory
+# is accounted differently), which would print an impossible "177% cold".
+# Clamp it: past 100 the message is the same.
+cold_pct() { awk -v t="${1:-0}" -v c="${2:-0}" 'BEGIN{ p = (t > 0) ? int(c*100/t) : 0; print (p > 100) ? 100 : p }'; }
+
+# hoarding <totalMB> <compressedMB> <processCount>
+hoarding() {
+  [ "${1:-0}" -ge "$MEM_APP_MB" ] || return 1
+  local cold; cold=$(cold_pct "$1" "$2")
+  # A crowd is damning only when the memory it holds is also going cold. Plenty
+  # of honest tools run dozens of processes — an agent runner sat at 79 of them
+  # while staying WARMER than the machine around it, because it was using them.
+  # The incident app ran 100 and was colder than everything else on the Mac.
+  [ "${3:-0}" -ge "$MEM_APP_PROCS" ] && [ "$cold" -ge "$SYS_COLD" ] && return 0
+  [ "$cold" -ge "$MEM_COLD_PCT" ] || return 1
+  # Clamp the bar: on a Mac already 90% cold, baseline+margin would ask for
+  # more than 100% and quietly retire the cold test exactly when memory is
+  # tightest. Past 95% there is no headroom left to be suspicious with.
+  local bar=$(( SYS_COLD + MEM_COLD_MARGIN )); [ "$bar" -gt 95 ] && bar=95
+  [ "$cold" -ge "$bar" ]
+}
+
+# Memory findings are shown, never reaped. A fat idle process is usually a
+# leak and sometimes an editor holding work nobody saved, and a footprint
+# cannot tell those apart — so this reports the evidence and leaves the
+# decision with the person. Nothing here reaches KILL_LIST, so `machogs kill`
+# cannot close one even if a caller names its pid, and FOUND stays untouched
+# so the "N reapable" summary keeps meaning what it says.
+queue_report() {
+  local pid=$1 reason=$2 identity
+  alive "$pid" || return
+  identity=$(identity_of "$pid"); [ -n "$identity" ] || return
+  targeted "$pid" "$identity" || return
+  case " $QUEUED_PIDS " in *" $pid "*) return ;; esac
+  QUEUED_PIDS="$QUEUED_PIDS $pid"
+  printf "    %s%-7s%s mem=%-9s age=%-12s %s\n" \
+    "$BLD" "$pid" "$NC" "$(mem_words "$(footprint_of "$pid")")" "$(etime_of "$pid")" "$reason"
+  row "$pid" "$SECTION" "report-only" "$(cpu_of "$pid")" "$(etime_of "$pid")" "$reason"
+}
 
 # Walk up the process tree, printing every ancestor pid.
 ancestry() {
@@ -784,6 +928,129 @@ if [ "$PORTS" -eq 1 ]; then
   exit 0
 fi
 
+# ---- memory: which apps hold your memory ------------------------------------
+# The Force Quit dialog answers "what is taking my memory" with one number per
+# APP. Nothing per-process can: the real incident was 24 GB across 100
+# processes under one chat app, with no single process near the total — every
+# per-process view told a smaller story than the true headline. So this mode
+# rolls every process up to the app responsible for it and ranks the apps.
+# A running app is NOT assumed healthy here (that assumption is exactly what
+# section 4 codifies, and exactly what let the incident grow for 65 hours).
+# Report only, like disk: this mode kills nothing, ever.
+if [ "$MEMORY" -eq 1 ]; then
+  host_stats
+  load_memmap
+
+  # One ps snapshot of the user's processes. Rolling up with root_of would
+  # fork ps a dozen times per process — a few hundred processes is seconds of
+  # forking for answers this one table already holds, so the same ancestry
+  # walk runs against the snapshot instead.
+  PIDTBL=$(ps -U "$(id -un)" -o pid=,ppid=,etime=,ucomm= | MM="$MEMMAP" awk '
+    function esecs(e,  d, t, x, a, n) { d = 0; t = e
+      if (e ~ /-/) { split(e, x, "-"); d = x[1]; t = x[2] }
+      n = split(t, a, ":")
+      return d*86400 + (n == 3 ? a[1]*3600 + a[2]*60 + a[3] : a[1]*60 + a[2]) }
+    BEGIN { n = split(ENVIRON["MM"], L, "\n")
+      for (i = 1; i <= n; i++) { split(L[i], f, " "); mem[f[1]] = f[2]; cmp[f[1]] = f[3] } }
+    { pid = $1; pp[pid] = $2; et[pid] = $3
+      name = $4; for (i = 5; i <= NF; i++) name = name " " $i
+      nm[pid] = name; order[++cnt] = pid }
+    END {
+      for (i = 1; i <= cnt; i++) {
+        pid = order[i]; r = pid; hops = 0
+        while (pp[r] in nm && pp[r] != r && hops < 12) { r = pp[r]; hops++ }
+        printf "%s\t%s\t%d\t%d\t%d\t%s\t%s\n", r, pid, mem[pid]+0, cmp[pid]+0, esecs(et[pid]), et[pid], nm[pid]
+      }
+    }')
+
+  # Name only the roots whose subtree could matter; whose() costs an lsof per
+  # call, and most roots are tiny one-process daemons nobody needs ranked.
+  NAMES=""
+  for r in $(printf '%s\n' "$PIDTBL" | awk -F'\t' -v crowd="$MEM_APP_PROCS" \
+      '{ tot[$1] += $3; n[$1]++ } END { for (r in tot) if (tot[r] >= 64 || n[r] >= crowd) print r }'); do
+    o=$(whose "$r"); [ -n "$o" ] || o=$(comm_of "$r" | short); [ -n "$o" ] || o="pid $r"
+    NAMES="${NAMES}${r}${TAB}${o}
+"
+  done
+
+  # Two roots can answer to the same app (an orphaned helper re-parented to
+  # launchd still belongs to the app that left it), so the rollup groups by
+  # NAME, not by root pid — same as the Force Quit dialog would.
+  APPTBL=$(printf '%s\n' "$PIDTBL" | NM="$NAMES" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["NM"], L, "\n")
+      for (i = 1; i <= n; i++) { k = index(L[i], "\t"); if (k) app[substr(L[i], 1, k-1)] = substr(L[i], k+1) } }
+    $1 in app {
+      a = app[$1]
+      tot[a] += $3; cm[a] += $4; cnt[a]++
+      if ($5 >= old[a]) { old[a] = $5; oldage[a] = $6 }
+      if ($3 >= bigm[a]) { bigm[a] = $3; bigp[a] = $2; bign[a] = $7 }
+    }
+    END { for (a in tot) printf "%d\t%d\t%d\t%s\t%s\t%d\t%s\t%s\n",
+            tot[a], cm[a], cnt[a], oldage[a], bigp[a], bigm[a], bign[a], a }
+  ' | sort -t"$TAB" -k1,1nr)
+  PROCTBL=$(printf '%s\n' "$PIDTBL" | NM="$NAMES" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["NM"], L, "\n")
+      for (i = 1; i <= n; i++) { k = index(L[i], "\t"); if (k) app[substr(L[i], 1, k-1)] = substr(L[i], k+1) } }
+    ($1 in app) && $3 >= 16 { printf "%s\t%s\t%s\t%s\t%s\t%s\n", app[$1], $2, $3, $4, $6, $7 }
+  ' | sort -t"$TAB" -k1,1 -k3,3nr)
+
+  if [ "$JSON" -eq 1 ]; then
+    printf '{\n  "mode": "memory",\n'
+    printf '  "host": {"load": %s, "cores": %s, "swap_used_mb": %s, "swap_total_mb": %s, "swap_pct": %s, "uptime_days": %s},\n' \
+      "${load:-0}" "${cores:-0}" "${swap_used:-0}" "${swap_tot:-0}" "${swap_pct:-0}" \
+      "$(uptime | sed -n 's/.*up \([0-9]*\) day.*/\1/p' | head -1 | grep -E '^[0-9]+$' || echo 0)"
+    printf '  "apps": [\n'
+    first=1
+    while IFS=$TAB read -r tot cm cnt oldage bigp bigm bign appname; do
+      [ -n "$appname" ] || continue
+      hoard=false; hoarding "$tot" "$cm" "$cnt" && hoard=true
+      [ $first -eq 1 ] || printf ',\n'
+      first=0
+      printf '    {"app": "%s", "memory_mb": %s, "compressed_mb": %s, "cold_pct": %s, "processes": %s, "oldest_age": "%s", "hoarding": %s, "procs": [' \
+        "$(jesc "$appname")" "$tot" "$cm" "$(cold_pct "$tot" "$cm")" "$cnt" \
+        "$(jesc "$(plain_age "$oldage")")" "$hoard"
+      pfirst=1
+      while IFS=$TAB read -r _a ppid pmem pcmp petime pname; do
+        [ -n "$ppid" ] || continue
+        [ $pfirst -eq 1 ] || printf ', '
+        pfirst=0
+        printf '{"pid": %s, "name": "%s", "memory_mb": %s, "compressed_mb": %s, "age": "%s"}' \
+          "$ppid" "$(jesc "$pname")" "$pmem" "$pcmp" "$(jesc "$(plain_age "$petime")")"
+      done < <(printf '%s\n' "$PROCTBL" | awk -F'\t' -v a="$appname" '$1 == a' | head -12)
+      printf ']}'
+    done < <(printf '%s\n' "$APPTBL")
+    [ $first -eq 0 ] && printf '\n'
+    printf '  ]\n}\n'
+    exit 0
+  fi
+
+  echo
+  echo "🧠 ${BLD}Your memory, by app${NC}  ${DIM}everything each app's processes hold, added up${NC}"
+  if [ "$swap_pct" -gt 80 ]; then
+    echo "   ${RED}Your Mac is ${swap_pct}% into its slow backup memory${NC} — this list is why it feels slow."
+    echo "   ${DIM}Apps here average ${SYS_COLD}% cold. Anything colder than that is hoarding, not working.${NC}"
+  fi
+  echo
+  [ -z "$APPTBL" ] && echo "  ${DIM}Could not read memory sizes (is \`top\` unavailable?).${NC}"
+  while IFS=$TAB read -r tot cm cnt oldage bigp bigm bign appname; do
+    [ -n "$appname" ] || continue
+    cold=$(cold_pct "$tot" "$cm")
+    line="  $(printf '%-24s' "$appname") ${BLD}$(printf '%9s' "$(mem_words "$tot")")${NC}  ${DIM}$(printf '%3s' "$cold")% cold · $(count_unit "$cnt" process) · oldest $(plain_age "$oldage")${NC}"
+    if hoarding "$tot" "$cm" "$cnt"; then
+      echo "$line  ${RED}← hoarding${NC}"
+      echo "      ${DIM}biggest piece: $bign (pid $bigp) holding $(mem_words "$bigm")${NC}"
+    else
+      echo "$line"
+    fi
+  done < <(printf '%s\n' "$APPTBL")
+  echo
+  echo "${DIM}Cold memory has been pushed out to disk because nothing has touched it in a long${NC}"
+  echo "${DIM}time. An app doing real work stays warm. This report closes nothing — to get the${NC}"
+  echo "${DIM}memory back, quit the app itself.${NC}"
+  echo
+  exit 0
+fi
+
 # --check: prove the safety net works. Lists every automation process and
 # whether the script would refuse to kill it, and why. Kills nothing.
 if [ "$MODE" = check ]; then
@@ -884,12 +1151,11 @@ hdr() {
 }
 
 # ---- 0. system health -----------------------------------------------------
-cores=$(sysctl -n hw.ncpu)
-# macOS: "load averages: 4.61 5.18 6.01" (space separated, no commas)
-load=$(uptime | sed 's/.*load averages*: *//' | awk '{print $1}' | tr -d ',')
-# macOS: "total = 16384.00M  used = 15131.31M  free = 1252.69M  (encrypted)"
-swap_tot=$(sysctl -n vm.swapusage  | awk '{print $3}' | tr -d 'M')
-swap_used=$(sysctl -n vm.swapusage | awk '{print $6}' | tr -d 'M')
+host_stats
+# The one top sample every memory check below reads from. Taken here, before
+# any section runs, because top costs a second or two and must never be paid
+# more than once per scan.
+load_memmap
 
 echo "${BLD}=== machogs ===${NC}  ${DIM}$(date '+%F %H:%M')  ·  mode: $MODE${NC}"
 hdr "System"
@@ -899,7 +1165,6 @@ if [ "${loadint:-0}" -gt "$cores" ]; then
 else
   echo "  load ${GRN}$load${NC} on $cores cores"
 fi
-swap_pct=$(awk -v u="${swap_used:-0}" -v t="${swap_tot:-1}" 'BEGIN{printf "%d", (u/t)*100}')
 if [ "$swap_pct" -gt 80 ]; then
   echo "  swap ${RED}${swap_used}M / ${swap_tot}M (${swap_pct}%)${NC}  ${RED}<- thrashing, reboot to clear${NC}"
 else
@@ -1041,6 +1306,10 @@ flush_kills
 hdr "4. Zombie app helpers  ${DIM}(app quit, helpers still running)${NC}"
 found_any=0
 for app in "${ZOMBIE_APPS[@]}"; do
+  # "App is open, helpers expected" is this section's whole premise, and it is
+  # also its blind spot: a RUNNING app can leak helpers for days and this loop
+  # will never look at them. Sections 6/6b close that gap — they judge every
+  # process by footprint alone, open parent app or not.
   pgrep -x "$app" >/dev/null 2>&1 && continue     # app is open, helpers expected
   for pid in $(pgrep -f "/$app\.app/.*(crashpad|Helper|gpu-process|utility|renderer)" 2>/dev/null); do
     queue "$pid" "$app zombie helper (app is closed)"
@@ -1082,6 +1351,71 @@ if [ $SHOW_SESSIONS -eq 1 ]; then
   echo "  ${DIM}This script will not kill sessions — you'd lose unsaved work.${NC}"
 fi
 
+# The person's own OPEN apps are out of bounds for the memory sections: the
+# binary a person launches from /Applications runs as launchd's direct child,
+# so ppid 1 plus a top-level app path means "there is a Dock icon for this" —
+# quitting it is their call, not this script's. Leaked helpers never look
+# like that (their path nests under Frameworks/Helpers, or their parent is a
+# helper that is still alive).
+is_open_app() {
+  [ "$(ppid_of "$1")" = "1" ] || return 1
+  comm_of "$1" | grep -qE '^(/System)?/Applications/[^/]+\.app/Contents/MacOS/[^/]+$'
+}
+
+# ---- 6. idle memory hogs ---------------------------------------------------
+# Every section above gates on CPU, and that blindness cost real damage: a
+# backend process sat on 7 GB of footprint for 65 hours at 0% CPU until macOS
+# ran out of application memory, and nothing here said a word. Big AND idle
+# AND old is the tell — big alone is an app working, busy alone is a build.
+hdr "6. Idle memory hogs  ${DIM}(holding a lot, doing nothing with it)${NC}"
+found_any=0
+while read -r pid mem cmp; do
+  [ -n "$pid" ] || continue
+  [ "${mem:-0}" -ge "$MEM_HOG_MB" ] || break      # map is sorted biggest-first
+  alive "$pid" || continue
+  [ "$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(id -u)" ] || continue
+  cpu=$(cpu_of "$pid"); ci=${cpu%.*}; [ "${ci:-0}" -lt "$MEM_HOG_MAX_CPU" ] || continue
+  [ "$(etime_secs "$(etime_of "$pid")")" -ge "$MEM_HOG_MIN_SECONDS" ] || continue
+  ucomm=$(ps -o ucomm= -p "$pid" 2>/dev/null | sed 's/ *$//')
+  echo "$ucomm" | grep -qE "$NEVER_SPIN" && continue
+  is_open_app "$pid" && continue
+  queue_report "$pid" "holding $(mem_words "$mem"), $(mem_words "$cmp") of it cold — $(echo "$ucomm" | short)"
+  found_any=1
+done < <(printf '%s\n' "$MEMMAP")
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+
+# ---- 6b. memory clone armies -----------------------------------------------
+# The other way memory dies: not one fat process but dozens of identical small
+# ones under a single parent, each too small for section 6 to notice, fatal in
+# aggregate (49 leaked REPL children took part in the same incident). Grouped
+# by parent + name; the group only counts when the COMBINED footprint is hog
+# sized, so eight worker threads of a busy app stay uninteresting.
+hdr "6b. Memory clone armies  ${DIM}(dozens of copies, huge added up)${NC}"
+found_any=0
+while IFS=$'\t' read -r pp cname count total pidlist; do
+  [ -n "$pp" ] || continue
+  echo "$cname" | grep -qE "$NEVER_SPIN" && continue
+  # A crowd directly under an open app's own main process is that app's
+  # working set — a browser's one-renderer-per-tab looks exactly like an army and
+  # is exactly not one. The army that killed a machine nested one level
+  # deeper, under a helper. (An army under a QUIT app still shows: its parent
+  # is a leftover helper or launchd-adopted orphan, never the open binary.)
+  is_open_app "$pp" && continue
+  parent=$(comm_of "$pp" | short); [ -n "$parent" ] || parent="pid $pp"
+  for pid in $pidlist; do
+    alive "$pid" || continue
+    queue_report "$pid" "one of $count $cname copies under $parent — $(mem_words "$total") between them"
+  done
+  found_any=1
+done < <(ps -U "$(id -un)" -o pid=,ppid=,ucomm= | MM="$MEMMAP" awk -v need="$CLONE_COUNT" -v mb="$MEM_HOG_MB" '
+  BEGIN { n = split(ENVIRON["MM"], L, "\n")
+    for (i = 1; i <= n; i++) { split(L[i], f, " "); mem[f[1]] = f[2] } }
+  { name = $3; for (i = 4; i <= NF; i++) name = name " " $i
+    k = $2 "\t" name
+    cnt[k]++; tot[k] += mem[$1] + 0; pids[k] = pids[k] " " $1 }
+  END { for (k in cnt) if (cnt[k] >= need && tot[k] >= mb) printf "%s\t%d\t%d\t%s\n", k, cnt[k], tot[k], pids[k] }')
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+
 # ---- summary --------------------------------------------------------------
 echo
 if [ "$MODE" = kill ]; then
@@ -1108,7 +1442,7 @@ if [ "$JSON" -eq 1 ]; then
   printf '  "summary": {"reapable": %s, "killed": %s},\n' "$FOUND" "$KILLED"
   printf '  "findings": [\n'
   first=1
-  while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
+  while IFS=$'\t' read -r p sec act cpu age detail csec identity memmb; do
     [ -n "$p" ] || continue
     if [ -n "$TARGETS" ] && ! targeted "$p" "$identity"; then continue; fi
     # a queued process that flush_kills actually reaped is reported as killed
@@ -1120,9 +1454,9 @@ if [ "$JSON" -eq 1 ]; then
     # the same halves broken out, so wrappers (the menu bar app) can log
     # closes in the format `machogs blame` reads.
     w=$(whatis "$p"); o=$(whose "$p")
-    st=$(story "$sec" "$w" "$o" 1 "${cpu:-0}" "$age" "${csec:-0}")
-    printf '    {"pid": %s, "identity": "%s", "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "age": "%s", "owner": "%s", "what": "%s", "detail": "%s", "story": "%s"}' \
-      "$p" "$(jesc "$identity")" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "$(jesc "$age")" "$(jesc "$o")" "$(jesc "$w")" "$(jesc "$detail")" "$(jesc "$st")"
+    st=$(story "$sec" "$w" "$o" 1 "${cpu:-0}" "$age" "${csec:-0}" "${memmb:-0}")
+    printf '    {"pid": %s, "identity": "%s", "section": "%s", "action": "%s", "cpu": %s, "cpu_seconds": %s, "memory_mb": %s, "age": "%s", "owner": "%s", "what": "%s", "detail": "%s", "story": "%s"}' \
+      "$p" "$(jesc "$identity")" "$(jesc "$sec")" "$(jesc "$act")" "${cpu:-0}" "${csec:-0}" "${memmb:-0}" "$(jesc "$age")" "$(jesc "$o")" "$(jesc "$w")" "$(jesc "$detail")" "$(jesc "$st")"
   done < "$ROWS"
   [ $first -eq 0 ] && printf '\n'
   printf '  ]\n}\n'
@@ -1177,15 +1511,15 @@ if [ "$HUMAN" -eq 1 ]; then
     # Group identical findings. Key = section + what it is + who left it.
     # Aggregate: how many, the worst CPU in the group, the oldest age, the pids.
     ENR=$(mktemp -t machogs-enr) || exit 1
-    while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
+    while IFS=$'\t' read -r p sec act cpu age detail csec identity memmb; do
       [ -n "$p" ] || continue
       alive "$p" || continue
       # "-" not "": tab is IFS whitespace, so bash COLLAPSES an empty field and
       # every column after it shifts left. That reads as a working script right
       # up until it compares a timestamp against a number.
       o=$(whose "$p"); [ -n "$o" ] || o="-"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$sec" "$(whatis "$p")" "$o" "$cpu" "$age" "${csec:-0}" "$p" >> "$ENR"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sec" "$(whatis "$p")" "$o" "$cpu" "$age" "${csec:-0}" "${memmb:-0}" "$p" >> "$ENR"
     done < <(printf '%s\n' "$CANDIDATES")
     # Two things that will silently eat the rest of this block if you put them
     # back: a heredoc inside $( ), and a nested $( ) inside this multi-line
@@ -1194,15 +1528,16 @@ if [ "$HUMAN" -eq 1 ]; then
     awk -F'\t' '
       { k=$1 "\t" $2 "\t" $3
         cnt[k]++
-        if (!(k in cpu)) { cpu[k]=0; scpu[k]=0; scsec[k]=0 }
+        if (!(k in cpu)) { cpu[k]=0; scpu[k]=0; scsec[k]=0; smem[k]=0 }
         if ($4+0 > cpu[k]+0) cpu[k]=$4+0
         scpu[k]  += $4+0          # total CPU% the whole group is holding
         scsec[k] += $6+0          # total CPU seconds the group has burned
+        smem[k]  += $7+0          # total footprint MB the group is sitting on
         if (length($5) > length(age[k]) || (length($5)==length(age[k]) && $5>age[k])) age[k]=$5
-        pids[k] = (k in pids ? pids[k] " " : "") $7 }
-      END { for (k in cnt) printf "%s\t%d\t%s\t%s\t%.1f\t%d\t%s\n",
-              k, cnt[k], cpu[k], age[k], scpu[k], scsec[k], pids[k] }
-    ' "$ENR" | sort -t"$TAB" -k5,5nr > "$GRP"
+        pids[k] = (k in pids ? pids[k] " " : "") $8 }
+      END { for (k in cnt) printf "%s\t%d\t%s\t%s\t%.1f\t%d\t%d\t%s\n",
+              k, cnt[k], cpu[k], age[k], scpu[k], scsec[k], smem[k], pids[k] }
+    ' "$ENR" | sort -t"$TAB" -k5,5nr -k7,7nr > "$GRP"
     rm -f "$ENR"
     ngroups=$(wc -l < "$GRP" | tr -d ' ')
     # is anything actually burning CPU, or is this all idle clutter?
@@ -1222,11 +1557,11 @@ if [ "$HUMAN" -eq 1 ]; then
     echo
 
     i=0; closed=0; freed_cpu=0; freed_csec=0
-    while IFS=$'\t' read -r sec what owner count cpu age scpu scsec pidlist; do
+    while IFS=$'\t' read -r sec what owner count cpu age scpu scsec smem pidlist; do
       [ -n "$sec" ] || continue
       i=$((i+1))
       [ "$MODE" = fix ] && echo "${DIM}${i} of ${ngroups}${NC}"
-      say_group "$sec" "$what" "$owner" "$count" "$cpu" "$age"
+      say_group "$sec" "$what" "$owner" "$count" "$cpu" "$age" "$smem"
       if [ "$MODE" = fix ]; then
         echo
         if [ "$count" -gt 1 ]; then
