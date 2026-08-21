@@ -51,6 +51,8 @@ HOT_CPU=${HOT_CPU:-50}                 # %CPU above which a process counts as ho
 SPIN_CPU_SECONDS=${SPIN_CPU_SECONDS:-14400}  # 4h CPU + hot now = stuck, not busy
 ORPHAN_MIN_SECONDS=${ORPHAN_MIN_SECONDS:-300} # an orphan must have lasted 5 min
 IDLE_SESSION_MINS=180      # a Claude Code session idle this long gets flagged
+LIVE_SESSION_MINS=${LIVE_SESSION_MINS:-60}   # work moved this recently = someone is here
+ABANDONED_DAYS=${ABANDONED_DAYS:-14}         # nothing written this long = really gone
 # Memory thresholds. `ps -o rss` is deliberately never used here: the process
 # that motivated these held 7,102 MB while its RSS read 357 MB — macOS had
 # compressed the rest out to disk, where ps cannot see it but your Mac still
@@ -736,6 +738,45 @@ SELF_SAFE=" $(ancestry $$ | tr '\n' ' ') "
 claude_app_pids() { pgrep -f "claude-code/.*MacOS/claude|Claude\.app/Contents/MacOS/Claude" 2>/dev/null; }
 CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
 
+# Where each agent tool writes its conversation to disk as it goes. This file
+# is the only honest liveness signal these tools have. They are SUPPOSED to
+# sit still between your turns, so age and CPU cannot tell a session you are
+# working in right now from one nobody has opened in a month — the two look
+# identical from the outside. The newest write is the last time a person was
+# actually there. Section 5 has read this for Claude Code from the start;
+# nothing else did, and a live Codex session got closed as a leak because of it.
+transcripts_for() {
+  case "$1" in
+    Codex|ChatGPT)  echo "$HOME/.codex/sessions" ;;
+    "Claude Code")  echo "$HOME/.claude/projects" ;;
+    *)              echo "" ;;
+  esac
+}
+
+# Has this tool's work moved inside the live window? Stops at the first match
+# rather than stat-ing a thousand old transcripts to answer a yes/no question.
+session_live() {
+  local dir; dir=$(transcripts_for "$1"); [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  [ -n "$(find "$dir" -name '*.jsonl' -mmin "-$LIVE_SESSION_MINS" -print -quit 2>/dev/null)" ]
+}
+
+# The reverse: nothing written in weeks, so whatever is still running belongs
+# to nobody. This is the end of the ladder where closing is actually safe.
+session_abandoned() {
+  local dir; dir=$(transcripts_for "$1"); [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  [ -z "$(find "$dir" -name '*.jsonl' -mtime "-$ABANDONED_DAYS" -print -quit 2>/dev/null)" ]
+}
+
+# Every process belonging to a tool whose work moved recently. Coarse on
+# purpose: while you are in a Codex session, none of its pieces get closed,
+# however idle or fat any one of them looks. Sections 6 and 6b still SHOW
+# them, because seeing a hoarder costs nothing and closing one costs work.
+agent_safe_pids() {
+  session_live "Codex" && pgrep -f "ChatGPT\.app/Contents/" 2>/dev/null
+  session_live "Claude Code" && claude_app_pids
+}
+AGENT_SAFE=" $(agent_safe_pids | tr '\n' ' ') "
+
 protected() {
   local pid=$1 a
   # protected if the process itself, OR any of its ancestors, is our own
@@ -744,6 +785,7 @@ protected() {
   for a in $pid $(ancestry "$pid"); do
     case "$SELF_SAFE"   in *" $a "*) return 0 ;; esac
     case "$CLAUDE_SAFE" in *" $a "*) return 0 ;; esac
+    case "$AGENT_SAFE"  in *" $a "*) return 0 ;; esac
   done
   return 1
 }
@@ -1618,8 +1660,15 @@ while IFS=$'\t' read -r gp sig; do
     else
       printf "    %s%-7s%s cpu=%-5s age=%-12s duplicate %s under %s ${DIM}(--dupes to kill)${NC}\n" \
         "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$sig" "$owner"
-      # reported but not queued: killing these needs --dupes
-      row "$pid" "$SECTION" "needs-dupes-flag" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      # reported but not queued: killing these needs --dupes. The protection
+      # check still has to happen here, because this path skips queue() and
+      # therefore skips protected() — that gap is how helpers belonging to a
+      # session someone was actively working in got reported as closeable.
+      if protected "$pid"; then
+        row "$pid" "$SECTION" "protected" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      else
+        row "$pid" "$SECTION" "needs-dupes-flag" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      fi
     fi
   done
 done < <(echo "$TBL" | awk -F'\t' 'NF{print $1"\t"$2}' | sort -u)
