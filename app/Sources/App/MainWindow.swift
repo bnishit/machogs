@@ -5,13 +5,14 @@ import SwiftUI
 import UserNotifications
 
 enum AppPage: String, CaseIterable, Identifiable {
-    case now, memory, ports, storage, receipts, settings
+    case now, memory, energy, ports, storage, receipts, settings
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .now: return "Overview"
         case .memory: return "Memory"
+        case .energy: return "Battery"
         case .ports: return "Ports"
         case .storage: return "Storage"
         case .receipts: return "Receipts"
@@ -23,6 +24,7 @@ enum AppPage: String, CaseIterable, Identifiable {
         switch self {
         case .now: return "gauge.with.needle"
         case .memory: return "memorychip"
+        case .energy: return "battery.25"
         case .ports: return "cable.connector"
         case .storage: return "internaldrive"
         case .receipts: return "doc.text"
@@ -46,7 +48,7 @@ struct MainWindow: View {
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 18) {
-                SidebarSection(title: "MAC", pages: [.now, .memory, .storage], router: router, badge: badge)
+                SidebarSection(title: "MAC", pages: [.now, .memory, .energy, .storage], router: router, badge: badge)
                     .joyReveal(appeared, delay: 0)
                 SidebarSection(title: "TOOLS", pages: [.ports], router: router, badge: badge)
                     .joyReveal(appeared, delay: 0.05)
@@ -110,6 +112,7 @@ struct MainWindow: View {
         switch router.page {
         case .now: NowPage(model: model)
         case .memory: MemoryPage(model: model)
+        case .energy: EnergyPage(model: model)
         case .ports: PortsPage(model: model)
         case .storage: StoragePage(model: model)
         case .receipts: ReceiptsPage(model: model, openNow: { router.page = .now })
@@ -125,6 +128,7 @@ struct MainWindow: View {
         switch page {
         case .now: return model.groups.reduce(0) { $0 + $1.count }
         case .memory: return model.memoryReport?.hoardingApps.count ?? 0
+        case .energy: return model.energyReport?.drainingApps.count ?? 0
         case .ports: return model.portsReport?.ports.filter(\.isClosable).count ?? 0
         case .storage: return model.diskReport?.items.filter { $0.verdict == "safe" }.count ?? 0
         default: return 0
@@ -539,6 +543,132 @@ struct MemoryAppRow: View {
 
     private func mbTextCold(_ proc: MemoryProcess) -> String {
         proc.memoryMB > 0 ? "\(min(100, proc.compressedMB * 100 / proc.memoryMB))%" : "0%"
+    }
+}
+
+struct EnergyPage: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                PageIntro(title: "Where your battery is going", detail: "Every app with all of its background pieces added up, and what each one costs you in minutes of battery an hour. Your screen and the Mac itself take the rest.")
+                if let error = model.energyError { ErrorCard(message: error, retry: { Task { await model.loadEnergy() } }) }
+                if let report = model.energyReport {
+                    powerCard(report)
+                    GroupBox {
+                        VStack(spacing: 0) {
+                            ForEach(Array(report.appsWorthNaming.enumerated()), id: \.element.id) { index, app in
+                                if index > 0 { Divider() }
+                                EnergyAppRow(app: app)
+                            }
+                            if report.appsWorthNaming.isEmpty {
+                                EmptyState(symbol: "battery.100.bolt", title: "Nothing is worth naming", detail: "No app is using enough power right now to cost you a minute of battery an hour.")
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("Apps, costliest first").font(.headline)
+                            Text("Machogs closes nothing on this screen. The app eating your battery is often the one you are using — quitting it is your call, not the pig's.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("These are estimates. Machogs takes what your Mac is drawing right now and splits it between apps by how hard each one is working, so trust the ranking more than the exact minute.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    ProgressView("Measuring what your Mac is drawing…").frame(maxWidth: .infinity).padding(40)
+                }
+            }
+            .padding(20)
+        }
+        .task { if model.energyReport == nil { await model.loadEnergy() } }
+    }
+
+    // The same cost means two different things depending on whether the wall
+    // is paying, so the power state leads and the headline is phrased from it.
+    private func powerCard(_ report: EnergyReport) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(report.power.summary).font(.title3.bold())
+                    Spacer()
+                    Button { Task { await model.loadEnergy() } } label: {
+                        if model.isLoadingEnergy { ProgressView().controlSize(.small) }
+                        else { Label("Check again", systemImage: "arrow.clockwise") }
+                    }
+                    .disabled(model.isLoadingEnergy)
+                }
+                if let worst = report.worstApp {
+                    Text("\(worst.app) is the biggest drain on your Mac right now.")
+                        .font(.body.weight(.medium))
+                    Text(report.costSentence(for: worst)).font(.callout).foregroundStyle(.secondary)
+                }
+                Text(report.power.onBattery
+                     ? "Your Mac is pulling \(report.power.wattsText) right now."
+                     : "Working this hard, your Mac would be pulling \(report.power.wattsText).")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }.padding(4)
+        }
+    }
+}
+
+struct EnergyAppRow: View {
+    let app: EnergyApp
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(spacing: 0) {
+                ForEach(app.processes) { proc in
+                    HStack(spacing: 12) {
+                        Text(proc.drainText).font(.caption.monospacedDigit().weight(.medium))
+                            .frame(width: 130, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(proc.name).font(.callout)
+                            Text("pid \(String(proc.pid)) • running \(proc.age)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 5).padding(.leading, 8)
+                }
+                if app.processCount > app.processes.count {
+                    Text("…and \(app.processCount - app.processes.count) smaller pieces")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 5).padding(.leading, 8)
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 12) {
+                Text(app.drainText).font(.callout.monospacedDigit().weight(.semibold))
+                    .frame(width: 140, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(app.app).font(.body.weight(.medium))
+                        if app.isDraining {
+                            Label("Draining you", systemImage: "battery.25")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                                .accessibilityLabel("This app has been draining your battery for hours")
+                        }
+                    }
+                    Text(rowDetail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var rowDetail: String {
+        var parts = ["\(app.processCount) process\(app.processCount == 1 ? "" : "es")", "open \(app.oldestAge)"]
+        if app.isDraining, let big = app.biggestProcess {
+            parts.append("hardest worker: \(big.name) at \(big.drainText)")
+        }
+        return parts.joined(separator: " • ")
     }
 }
 

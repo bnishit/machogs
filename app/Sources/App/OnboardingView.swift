@@ -46,7 +46,7 @@ struct OnboardingView: View {
                 Text("YOUR MAC, UNMASKED").font(.caption.weight(.bold)).tracking(1.5).foregroundStyle(.pink)
                 Text("Your apps don’t always go home when you do.")
                     .font(.system(size: 38, weight: .bold, design: .rounded))
-                Text("Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. MacHogs names the app and shows whether it matters.")
+                Text("Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. Machogs names the app and shows whether it matters.")
                     .font(.title3).foregroundStyle(.secondary)
                 Button { showSightDetails.toggle() } label: { Label("What can the pig see?", systemImage: "eye") }
                     .buttonStyle(.link)
@@ -114,13 +114,13 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Should the pig keep watch?").font(.system(size: 34, weight: .bold, design: .rounded))
                 Text("You stay in control either way.").font(.title3).foregroundStyle(.secondary)
-                ChoiceCard(title: "Keep watch for me", detail: "Checks every 2 minutes and opens MacHogs when it catches something. It never closes anything alone.", selected: keepWatch) { keepWatch = true }
-                ChoiceCard(title: "Only when I open MacHogs", detail: "No background checks. Run one whenever your Mac feels wrong.", selected: !keepWatch) {
+                ChoiceCard(title: "Keep watch for me", detail: "Checks every 2 minutes and opens Machogs when it catches something. It never closes anything alone.", selected: keepWatch) { keepWatch = true }
+                ChoiceCard(title: "Only when I open Machogs", detail: "No background checks. Run one whenever your Mac feels wrong.", selected: !keepWatch) {
                     keepWatch = false; allowAlerts = false; startAtLogin = false
                 }
                 if keepWatch {
                     Toggle("Tell me when the pig catches something", isOn: $allowAlerts)
-                    Toggle("Start MacHogs after I log in", isOn: $startAtLogin)
+                    Toggle("Start Machogs after I log in", isOn: $startAtLogin)
                 }
                 if let error = settings.setupError {
                     Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
@@ -150,7 +150,7 @@ struct OnboardingView: View {
         if model.hasSwapPressure {
             return "Your Mac is using its disk as emergency working memory. That can make everything feel slow. Closing forgotten work will not undo it—save your work, then restart from the Apple menu."
         }
-        guard let first = model.groups.first else { return "Your apps cleaned up after themselves. If your Mac still feels slow, MacHogs did not find the cause." }
+        guard let first = model.groups.first else { return "Your apps cleaned up after themselves. If your Mac still feels slow, Machogs did not find the cause." }
         let impact = first.isHot ? "This can cause heat, fan noise, and shorter battery life." : "It is idle, so it is not heating your Mac. It is still holding memory."
         let more = model.groups.count > 1 ? " There are \(model.groups.count - 1) more app groups you can inspect." : ""
         return "\(first.story) \(impact)\(more)"
@@ -162,7 +162,7 @@ struct OnboardingView: View {
     }
 
     private var finishLabel: String {
-        guard let first = model.groups.first else { return "Open MacHogs" }
+        guard let first = model.groups.first else { return "Open Machogs" }
         return "Show me what \(owner(first)) left"
     }
 

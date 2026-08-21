@@ -358,6 +358,74 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertFalse(MemoryApp.isHoarding(memoryMB: 900, compressedMB: 850, processCount: 2))
     }
 
+    func testEnergyRollupDecodesAndRanksApps() throws {
+        let report = try energyReportFixture()
+        XCTAssertEqual(report.apps.map(\.app), ["Codex", "Zoom", "Finder"])
+        XCTAssertEqual(report.apps[0].minutesPerHour, 34.6)
+        XCTAssertEqual(report.apps[0].biggestProcess?.name, "codex")
+        XCTAssertEqual(report.worstApp?.app, "Codex")
+        // Finder costs 0.4 minutes an hour, which is not an answer to anyone's
+        // question and must not take up a row
+        XCTAssertEqual(report.appsWorthNaming.map(\.app), ["Codex", "Zoom"])
+        XCTAssertEqual(report.power.chargePercent, 62)
+        XCTAssertTrue(report.power.onBattery)
+    }
+
+    // The one thing this feature must never do: put macOS's own unitless
+    // "Energy Impact" number, or any bare score, in front of a person.
+    func testBatteryCostIsAlwaysSpokenInMinutes() throws {
+        XCTAssertEqual(batteryMinutesText(34.6), "about 35 minutes")
+        XCTAssertEqual(batteryMinutesText(4.2), "about 4 minutes")
+        XCTAssertEqual(batteryMinutesText(1.2), "about a minute")
+        // never "0 minutes", which reads like the measurement failed
+        XCTAssertEqual(batteryMinutesText(0.4), "under a minute")
+        let report = try energyReportFixture()
+        XCTAssertEqual(report.apps[0].drainText, "about 35 minutes an hour")
+        XCTAssertEqual(report.apps[0].biggestProcess?.drainText, "about 21 minutes an hour")
+    }
+
+    // Plugged in there is no drain to report. The same cost has to be stated
+    // as what it WOULD take, never as a live drain that is not happening.
+    func testPluggedInReportsWhatItWouldCostRatherThanAFakeDrain() throws {
+        let onBattery = try energyReportFixture()
+        let codex = onBattery.apps[0]
+        XCTAssertEqual(onBattery.costSentence(for: codex),
+                       "Codex is costing you about 35 minutes of battery every hour.")
+        XCTAssertEqual(onBattery.power.summary, "On battery, 62% left, about 3 hours 10 minutes to go.")
+
+        let plugged = try energyReportFixture(onBattery: false)
+        XCTAssertEqual(plugged.costSentence(for: codex),
+                       "Unplugged, Codex would cost you about 35 minutes of battery every hour.")
+        XCTAssertEqual(plugged.power.summary, "Plugged in and charging, 62%. Nothing is draining right now.")
+        XCTAssertTrue(plugged.power.wattsEstimated, "there is nothing to measure while the wall is paying")
+    }
+
+    func testDrainingRuleNeedsSustainedCostNotABusyMoment() {
+        // the case worth warning about: a helper that has never stopped
+        XCTAssertTrue(EnergyApp.isDraining(minutesPerHour: 34.6, cpuSeconds: 20_000, lifetimeSeconds: 40_000))
+        // the slander that must NOT fire: the video call you are on right now.
+        // Expensive this minute, idle for the eight hours it has been open.
+        XCTAssertFalse(EnergyApp.isDraining(minutesPerHour: 22.0, cpuSeconds: 600, lifetimeSeconds: 28_800))
+        // and an app that has only just launched gets its half hour of grace
+        XCTAssertFalse(EnergyApp.isDraining(minutesPerHour: 30.0, cpuSeconds: 500, lifetimeSeconds: 600))
+        // cheap, however long it has been going
+        XCTAssertFalse(EnergyApp.isDraining(minutesPerHour: 2.0, cpuSeconds: 30_000, lifetimeSeconds: 40_000))
+    }
+
+    @MainActor
+    func testEnergyPageLoadsAndNeverOffersToCloseAnything() async throws {
+        let report = try fixture([finding(pid: 10, identity: "a")])
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        fake.energyReport = try energyReportFixture()
+        let model = AppModel(service: fake)
+
+        await model.loadEnergy()
+        XCTAssertEqual(model.energyReport?.worstApp?.app, "Codex")
+        XCTAssertEqual(model.energyReport?.drainingApps.map(\.app), ["Codex"])
+        XCTAssertNil(model.energyError)
+        XCTAssertTrue(fake.closeTargets.isEmpty, "nothing on the battery screen closes anything")
+    }
+
     private func fixture(_ findings: [String], mode: String = "report", killed: Int = 0, swapPct: Int = 10) throws -> EngineReport {
         let data = """
         {"mode":"\(mode)","host":{"load":1.5,"cores":8,"swap_used_mb":10,"swap_total_mb":100,"swap_pct":\(swapPct),"uptime_days":2},"summary":{"reapable":\(findings.count),"killed":\(killed)},"findings":[\(findings.joined(separator: ","))]}
@@ -386,6 +454,34 @@ final class MachogsCoreTests: XCTestCase {
         ]}
         """.data(using: .utf8)!
         return try JSONDecoder().decode(MemoryReport.self, from: data)
+    }
+
+    private func energyReportFixture(onBattery: Bool = true) throws -> EnergyReport {
+        let power = onBattery
+            ? """
+              {"battery_present":true,"on_battery":true,"charging":false,"charge_pct":62,
+               "time_left":"about 3 hours 10 minutes","watts":24.1,"watts_estimated":false,"busy_cores":2.5}
+              """
+            : """
+              {"battery_present":true,"on_battery":false,"charging":true,"charge_pct":62,
+               "time_left":"","watts":32.6,"watts_estimated":true,"busy_cores":4.1}
+              """
+        let data = """
+        {"mode":"energy","power":\(power),
+         "apps":[
+          {"app":"Codex","minutes_per_hour":34.6,"share_pct":58,"processes":12,"cpu_seconds":20000,
+           "lifetime_seconds":40000,"oldest_age":"11 hours","draining":true,
+           "procs":[{"pid":98965,"name":"codex","minutes_per_hour":20.9,"age":"11 hours"},
+                    {"pid":98978,"name":"Codex (Renderer)","minutes_per_hour":13.7,"age":"11 hours"}]},
+          {"app":"Zoom","minutes_per_hour":22.0,"share_pct":36,"processes":4,"cpu_seconds":600,
+           "lifetime_seconds":28800,"oldest_age":"8 hours","draining":false,
+           "procs":[{"pid":410,"name":"zoom.us","minutes_per_hour":22.0,"age":"8 hours"}]},
+          {"app":"Finder","minutes_per_hour":0.4,"share_pct":1,"processes":1,"cpu_seconds":30,
+           "lifetime_seconds":86400,"oldest_age":"1 day","draining":false,
+           "procs":[{"pid":511,"name":"Finder","minutes_per_hour":0.4,"age":"1 day"}]}
+        ]}
+        """.data(using: .utf8)!
+        return try JSONDecoder().decode(EnergyReport.self, from: data)
     }
 
     private func diskFixture(freedMB: Int) throws -> (report: DiskReport, item: DiskItem, result: DiskClearResult) {
@@ -430,6 +526,7 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     var portsReport: PortsReport?
     var portsError: Error?
     var memoryReport: MemoryReport?
+    var energyReport: EnergyReport?
     var inspectedPorts: [Int] = []
     var closedPortTargets: [PortTarget] = []
     var portInspectionDelayNanoseconds: UInt64 = 0
@@ -469,6 +566,10 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
         closedPortTargets.append(target)
         guard let portsReport else { throw MachogsClientError.invalidResponse }
         return portsReport
+    }
+    func inspectEnergy() async throws -> EnergyReport {
+        guard let energyReport else { throw MachogsClientError.invalidResponse }
+        return energyReport
     }
     func inspectMemory() async throws -> MemoryReport {
         guard let memoryReport else { throw MachogsClientError.invalidResponse }

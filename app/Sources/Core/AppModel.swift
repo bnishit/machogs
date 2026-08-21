@@ -47,7 +47,7 @@ public struct ActionReview: Identifiable, Equatable, Sendable {
     public var body: String {
         switch kind {
         case .processes:
-            return "MacHogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected."
+            return "Machogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected."
         case .port(let item):
             let location = item.cwd.isEmpty ? "" : " in \(item.cwd)"
             return "Machogs checked the listener again. This will stop \(item.process)\(location). Unsaved work inside it can be lost. macOS services and live coding sessions stay protected."
@@ -90,6 +90,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var memoryError: String?
     @Published public private(set) var isLoadingMemory = false
     @Published public private(set) var lastSuccessfulMemoryScan: Date?
+    @Published public private(set) var energyReport: EnergyReport?
+    @Published public private(set) var energyError: String?
+    @Published public private(set) var isLoadingEnergy = false
+    @Published public private(set) var lastSuccessfulEnergyScan: Date?
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
     private let service: any MachogsServing
@@ -166,6 +170,18 @@ public final class AppModel: ObservableObject {
             lastSuccessfulMemoryScan = Date()
         }
         catch { memoryError = error.localizedDescription }
+    }
+
+    public func loadEnergy() async {
+        guard !isLoadingEnergy else { return }
+        isLoadingEnergy = true
+        energyError = nil
+        defer { isLoadingEnergy = false }
+        do {
+            energyReport = try await service.inspectEnergy()
+            lastSuccessfulEnergyScan = Date()
+        }
+        catch { energyError = error.localizedDescription }
     }
 
     public func requestProcessReview(_ groups: [FindingGroup]) async {

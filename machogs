@@ -10,6 +10,7 @@
 #   machogs brag            a shareable card of what your Mac has wasted
 #   machogs disk            where your storage went (report-only, deletes nothing)
 #   machogs memory          which APPS hold your memory, and who is hoarding it
+#   machogs energy          which APPS are eating your battery, in minutes/hour
 #   machogs ports           every port in use and what is squatting it
 #   machogs port 3000       who holds port 3000;  add `kill` to free it
 #   machogs --details       the technical report, by category
@@ -63,11 +64,35 @@ MEM_APP_MB=${MEM_APP_MB:-4096}         # a whole APP worth flagging in `machogs 
 MEM_COLD_PCT=${MEM_COLD_PCT:-60}       # this much of it compressed cold = hoarding
 MEM_COLD_MARGIN=${MEM_COLD_MARGIN:-15} # ...and this far above the machine baseline
 MEM_APP_PROCS=${MEM_APP_PROCS:-20}     # or simply this many processes for one app
+# Battery arithmetic. Apple silicon: a core at full tilt costs roughly 6W,
+# against a machine that idles near 8W — the same two figures the receipt's
+# battery line is built on. They only ever split a drain into shares; neither
+# number is ever printed, because nobody thinks about their laptop in watts.
+WATTS_IDLE=${WATTS_IDLE:-8}            # what the Mac costs with nothing running
+WATTS_PER_CORE=${WATTS_PER_CORE:-6}    # ...and what one core at full tilt adds
+# A battery drainer worth naming: costing real minutes AND doing it steadily.
+# The second half is what stops the report slandering the app you are using —
+# a foreground app you just gave work to is expensive for a minute; the one to
+# tell someone about has been expensive for its whole life.
+ENERGY_APP_MINS=${ENERGY_APP_MINS:-10}      # minutes of battery an hour it costs
+ENERGY_SUSTAIN_PCT=${ENERGY_SUSTAIN_PCT:-25} # ...averaged over its whole lifetime
+ENERGY_MIN_SECONDS=${ENERGY_MIN_SECONDS:-1800} # young apps get half an hour of grace
 # Processes that legitimately pin a core for hours — or, for the memory
 # sections, legitimately hold gigabytes: a virtual machine's footprint IS the
 # guest's RAM, and closing one can lose unsaved work inside it. Matched
 # against ucomm.
 NEVER_SPIN="WindowServer|kernel_task|launchd|ffmpeg|HandBrake|Compressor|backupd|mds|mds_stores|mdworker|photoanalysisd|com.apple.Virtua|qemu|Docker|com.docker"
+# Never blamed for battery, because blaming them is noise. WindowServer is the
+# #1 energy consumer on every Mac ever made: it is the display compositor, and
+# its cost is really the sum of what every app asks it to draw. Same for the
+# audio daemon (it plays what an app asked it to play), the kernel, and pid 1.
+# None of them can be quit, and none of them are the answer to "what is eating
+# my battery". They are left out of the ranking AND out of the total, which
+# hands their cost back to the apps causing it, in proportion. Note this list
+# is deliberately NOT NEVER_SPIN: a video encode legitimately pins a core for
+# hours and is exempt there, but it is absolutely draining your battery and a
+# person deserves to be told so.
+NEVER_BLAME="WindowServer|kernel_task|launchd|coreaudiod|hidd|powerd|sysmond|^top$"
 ZOMBIE_APPS=("Cursor" "Code" "Electron")   # apps that leak helpers after quitting
 # process patterns treated as "MCP / automation servers"
 MCP_PATTERNS="playwright-mcp|@playwright/mcp|mcp-server-|/mcp/server\.(c|m)?js|modelcontextprotocol"
@@ -89,13 +114,14 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; MEMORY=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; MEMORY=0; ENERGY=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
     plan)        MODE=plan ;;
     ports|port)  PORTS=1 ;;
     memory)      MEMORY=1 ;;
+    energy)      ENERGY=1 ;;
     fix)         MODE=fix ;;
     blame)       MODE=blame ;;
     brag)        MODE=brag ;;
@@ -118,7 +144,7 @@ for a in "$@"; do
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
     --details)   DETAILS=1 ;;
-    -h|--help)   sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -293,6 +319,32 @@ phone_charges() { awk -v s="${1:-0}" 'BEGIN{printf "%d", s/9000}'; }
 # else in this file; gigabytes only appear here, at the moment of speaking.
 mem_words() { awk -v m="${1:-0}" 'BEGIN{ if (m >= 1024) printf "%.1f GB", m/1024; else printf "%d MB", m }'; }
 
+# 4.07 -> "about 4 minutes an hour". The only form a battery cost is ever
+# spoken in. macOS's own answer to this question is "Energy Impact: 32.4",
+# which tells a person nothing they can feel; minutes of their afternoon does.
+# Anything under a minute is named rather than rounded, because "0 minutes an
+# hour" reads like the tool failed to measure it.
+mins_words() {
+  awk -v m="${1:-0}" 'BEGIN{
+    if (m < 1) { printf "under a minute" }
+    else if (m < 1.5) { printf "about a minute" }
+    else { printf "about %d minutes", m + 0.5 } }'
+}
+drain_words() { printf '%s an hour' "$(mins_words "$1")"; }
+
+# "3:10" from pmset -> "about 3 hours 10 minutes". Empty in, empty out: macOS
+# refuses to estimate for the first minutes after a plug change, and inventing
+# a number there would be the one thing worse than saying nothing.
+time_left_words() {
+  case "${1:-}" in
+    *:*) awk -F: -v h="${1%%:*}" -v m="${1##*:}" 'BEGIN{
+           h += 0; m += 0
+           if (h > 0) printf "about %d hour%s %d minutes", h, (h == 1 ? "" : "s"), m
+           else printf "about %d minutes", m }' ;;
+    *)   echo "" ;;
+  esac
+}
+
 article() {
   local a="A"; [ "${2:-}" = lower ] && a="a"
   case "$1" in [AaEeIiOoUu]*) echo "${a}n" ;; *) echo "$a" ;; esac
@@ -452,27 +504,43 @@ targeted() {
 cpusecs() { echo "${1:-0:0}" | awk -F: '{printf "%d", $1*60 + $2}'; }
 hms()     { awk -v s="$1" 'BEGIN{printf "%dh%02dm", s/3600, (s%3600)/60}'; }
 
-# ---- memory map ------------------------------------------------------------
-# One `top` sample, taken once and parsed into "pid footprintMB compressedMB"
-# lines. top costs one to two SECONDS per invocation, so it must never appear
-# inside a per-process loop the way the cheap ps lookups do — everything that
-# needs a memory number reads this map instead. top's MEM column is
-# phys_footprint, the figure Activity Monitor shows; its CMPRS column is the
-# slice macOS has compressed out because nothing touched it — the tell that a
-# process is hoarding, not working. Sorted biggest-first by top, which the
-# hog scan relies on to stop early. If top is missing or fails the map stays
+# ---- process map -----------------------------------------------------------
+# One `top` sample, taken once and parsed into
+# "pid footprintMB compressedMB energyImpact cpuPercent" lines. top costs one
+# to two SECONDS per invocation, so it must never appear inside a per-process
+# loop the way the cheap ps lookups do — everything that needs a memory or
+# power number reads this map instead, and there is exactly one top per run.
+# top's MEM column is phys_footprint, the figure Activity Monitor shows; its
+# CMPRS column is the slice macOS has compressed out because nothing touched
+# it — the tell that a process is hoarding, not working. POWER is macOS's
+# Energy Impact: a unitless composite that is a fine ranking signal and a
+# terrible thing to show a person, so it never leaves this file as itself.
+# Sorted biggest-memory-first here rather than by top, because the sort key
+# has to stay the same whichever column this run cares about; the hog scan
+# relies on that order to stop early. If top is missing or fails the map stays
 # empty, footprint_of answers 0 for everyone, and every memory feature
 # degrades to finding nothing rather than erroring.
+#
+# load_memmap [samples]. Energy asks for 2, and must: top's FIRST sample has
+# no previous sample to diff against, so it reports POWER and %CPU as 0.0 for
+# every process on the machine. Reading it gives a confidently empty answer,
+# which is worse than an error. Only the last sample is ever parsed, so one
+# sample and two samples come out of here the same shape.
 MEMMAP=""
 load_memmap() {
-  MEMMAP=$(top -l 1 -o mem -n 200 -stats pid,command,mem,cmprs 2>/dev/null | awk '
+  MEMMAP=$(top -l "${1:-1}" -o power -n 2000 -stats pid,command,mem,cmprs,power,cpu 2>/dev/null | awk '
     # values arrive suffixed (7102M, 1.2G, 512K, 0B) — normalise to whole MB
     function mb(v) { sub(/[+-]$/, "", v)
       if (v ~ /G/) return int(v * 1024)
       if (v ~ /M/) return int(v + 0)
       if (v ~ /K/) return int(v / 1024)
       return 0 }
-    $1 ~ /^[0-9]+$/ && NF >= 4 { print $1, mb($(NF-1)), mb($NF) }')
+    # every sample restates the header, so a header means everything held so
+    # far belonged to an earlier sample and is thrown away
+    /^PID[ \t]+COMMAND/ { n = 0; next }
+    $1 ~ /^[0-9]+$/ && NF >= 6 { n++
+      row[n] = $1 " " mb($(NF-3)) " " mb($(NF-2)) " " $(NF-1)+0 " " $NF+0 }
+    END { for (i = 1; i <= n; i++) print row[i] }' | sort -k2,2nr)
   # What fraction of ALL memory on this Mac is currently cold. Under real
   # pressure macOS compresses indiscriminately, so at 82% swap the innocent
   # apps sit at 83-93% cold too and an absolute "is it cold" test stops
@@ -484,6 +552,11 @@ load_memmap() {
 SYS_COLD=0
 footprint_of()  { printf '%s\n' "$MEMMAP" | awk -v p="${1:-0}" '$1==p {print $2; f=1; exit} END{if (!f) print 0}'; }
 compressed_of() { printf '%s\n' "$MEMMAP" | awk -v p="${1:-0}" '$1==p {print $3; f=1; exit} END{if (!f) print 0}'; }
+# How much of the machine's compute is in use right now, in whole cores. The
+# per-process %CPU column is used rather than top's "CPU usage:" summary line
+# because power is handed out per process, and the two must add up against the
+# same denominator or an app's share is measured against work nobody did.
+busy_cores() { printf '%s\n' "$MEMMAP" | awk '{c += $5} END{printf "%.2f", c/100}'; }
 
 # Host vitals, shared by the main scan's System section and `machogs memory`.
 host_stats() {
@@ -495,6 +568,63 @@ host_stats() {
   swap_used=$(sysctl -n vm.swapusage | awk '{print $6}' | tr -d 'M')
   swap_pct=$(awk -v u="${swap_used:-0}" -v t="${swap_tot:-1}" 'BEGIN{printf "%d", (u/t)*100}')
 }
+
+# What the battery is actually doing, with no sudo anywhere: ioreg reads the
+# smart battery directly (amperage in mA, negative while discharging; voltage
+# in mV) and pmset supplies the charge and the estimate macOS itself shows.
+# Sets: BATT_PRESENT, ON_BATTERY, CHARGING, CHARGE_PCT, TIME_LEFT, WATTS,
+# WATTS_ESTIMATED.
+#
+# On battery the wattage is measured. Plugged in there is nothing to measure —
+# the wall is paying — so it is modelled from how hard the machine is working,
+# and WATTS_ESTIMATED says so out loud. Printing a measured-looking 0W, or the
+# charger's draw, would both be lies about the same moment.
+battery_stats() {
+  local raw amp volt measured
+  # anchored to the start of a line on purpose: the "BatteryData" blob is one
+  # enormous line containing its own "Voltage"=... and would win otherwise
+  raw=$(ioreg -rn AppleSmartBattery 2>/dev/null | awk -F' = ' \
+    '/^ *"(Amperage|Voltage|IsCharging|ExternalConnected)" = / {
+       k = $1; gsub(/[^A-Za-z]/, "", k); print k "=" $2 }')
+  amp=$(printf '%s\n' "$raw"  | awk -F= '$1=="Amperage"{print $2}')
+  volt=$(printf '%s\n' "$raw" | awk -F= '$1=="Voltage"{print $2}')
+  BATT_PRESENT=false; [ -n "$volt" ] && BATT_PRESENT=true
+  CHARGING=false;     printf '%s\n' "$raw" | grep -q 'IsCharging=Yes' && CHARGING=true
+  ON_BATTERY=false
+  if [ "$BATT_PRESENT" = true ] && ! printf '%s\n' "$raw" | grep -q 'ExternalConnected=Yes'; then
+    ON_BATTERY=true
+  fi
+  CHARGE_PCT=$(pmset -g batt 2>/dev/null | grep -Eo '[0-9]+%' | head -1 | tr -d '%')
+  CHARGE_PCT=${CHARGE_PCT:-0}
+  # only meaningful while discharging: plugged in, this same field is time to
+  # a FULL CHARGE, which is the opposite of what the word "left" would promise
+  TIME_LEFT=""
+  [ "$ON_BATTERY" = true ] && TIME_LEFT=$(pmset -g batt 2>/dev/null |
+    sed -n 's/.*; \([0-9]*:[0-9]*\) remaining.*/\1/p' | head -1)
+  BUSY_CORES=$(busy_cores)
+  WATTS_ESTIMATED=true
+  WATTS=$(awk -v idle="$WATTS_IDLE" -v per="$WATTS_PER_CORE" -v c="${BUSY_CORES:-0}" \
+    'BEGIN{printf "%.1f", idle + per*c}')
+  if [ "$ON_BATTERY" = true ] && [ -n "$amp" ]; then
+    # Discharging current is milliamps and negative; times millivolts over a
+    # million is watts. Some macOS builds report the same field as an unsigned
+    # 64-bit value instead, so a discharge arrives as a number near 1.8e19 —
+    # and awk's doubles cannot subtract that back down to milliamps without
+    # losing more precision than the reading is worth. Anything that does not
+    # come out as a wattage a laptop could plausibly be drawing is dropped in
+    # favour of the model, which is at least honest about being one. A made-up
+    # measured number is the only outcome worse than an estimate.
+    measured=$(awk -v a="$amp" -v v="${volt:-0}" 'BEGIN{
+      w = (a < 0 ? -a : a) * v / 1000000
+      printf "%.1f", w }')
+    if [ "$(awk -v w="$measured" 'BEGIN{print (w > 0.5 && w < 150) ? 1 : 0}')" = "1" ]; then
+      WATTS=$measured
+      WATTS_ESTIMATED=false
+    fi
+  fi
+}
+BATT_PRESENT=false; ON_BATTERY=false; CHARGING=false
+CHARGE_PCT=0; TIME_LEFT=""; WATTS=0; WATTS_ESTIMATED=true; BUSY_CORES=0
 
 # An APP is hoarding when it is big and either most of its memory has gone
 # cold, or it has quietly piled up a crowd of processes. Cold is the honest
@@ -521,6 +651,39 @@ hoarding() {
   # tightest. Past 95% there is no headroom left to be suspicious with.
   local bar=$(( SYS_COLD + MEM_COLD_MARGIN )); [ "$bar" -gt 95 ] && bar=95
   [ "$cold" -ge "$bar" ]
+}
+
+# Energy Impact -> minutes of battery an hour. The whole translation lives
+# here, and it is a proportional split, not a measurement of the app:
+#   share    = this app's impact / the impact of everything blameable
+#   compute  = the watts the machine spends on running things, which is its
+#              total draw less what it costs to merely be switched on
+#   minutes  = 60 * share * (compute / total)
+# The last step is what keeps it honest. Apps split the compute share of the
+# drain between them; the screen, the radios and the idle machine keep the
+# rest, so the app list never adds up to a whole hour of a battery it did not
+# spend. An hour of running costs an hour of battery, and this says how many
+# of those minutes each app took.
+# drain_mins <appImpact> <totalImpact> <watts>
+drain_mins() {
+  awk -v ei="${1:-0}" -v tot="${2:-0}" -v w="${3:-0}" -v idle="$WATTS_IDLE" 'BEGIN{
+    compute = w - idle; if (compute < 0) compute = 0
+    if (tot <= 0 || w <= 0) { print "0.0"; exit }
+    printf "%.1f", 60 * (ei/tot) * (compute/w) }'
+}
+
+# An app worth naming as a battery drainer is expensive AND has been expensive
+# for as long as it has existed. Cost alone would name whatever you are using
+# right now — a video call, a build, the editor you are typing in — which is
+# true, useless, and reads as an accusation. Lifetime average CPU is the tell
+# that separates them: an app you just gave work to has burned seconds against
+# hours of being open, while the one to warn someone about has never stopped.
+# draining <minutes> <cpuSeconds> <lifetimeSeconds>
+draining() {
+  awk -v m="${1:-0}" -v c="${2:-0}" -v e="${3:-0}" -v mins="$ENERGY_APP_MINS" \
+      -v pct="$ENERGY_SUSTAIN_PCT" -v grace="$ENERGY_MIN_SECONDS" 'BEGIN{
+    if (m < mins || e < grace) exit 1
+    exit !((e > 0 ? c*100/e : 0) >= pct) }'
 }
 
 # Memory findings are shown, never reaped. A fat idle process is usually a
@@ -1047,6 +1210,185 @@ if [ "$MEMORY" -eq 1 ]; then
   echo "${DIM}Cold memory has been pushed out to disk because nothing has touched it in a long${NC}"
   echo "${DIM}time. An app doing real work stays warm. This report closes nothing — to get the${NC}"
   echo "${DIM}memory back, quit the app itself.${NC}"
+  echo
+  exit 0
+fi
+
+# ---- energy: where the battery is going -------------------------------------
+# macOS already knows the answer and states it as "Energy Impact: 32.4", which
+# is a unitless composite and tells a person nothing they can act on. So the
+# impact number is used here only to rank and to split, and never printed. The
+# printed answer is the one a person feels: how many minutes of their battery
+# an app costs them per hour it runs.
+# Report only, like memory, and for a sharper reason: the app burning your
+# battery is very often the one you are looking at. Closing it is not this
+# tool's call.
+if [ "$ENERGY" -eq 1 ]; then
+  load_memmap 2
+  battery_stats
+
+  # Every process on the machine, not only this user's, unlike the memory
+  # rollup: a system daemon reindexing the disk drains the same battery a
+  # browser does, and that is frequently the true answer to "why is it dying
+  # today". The ancestry walk stops short of pid 1 for the same reason
+  # ancestry() does — launchd is everyone's parent, and rolling up into it
+  # would report the whole Mac as one app called launchd.
+  PIDTBL=$(ps -ax -o pid=,ppid=,etime=,time=,ucomm= | MM="$MEMMAP" NB="$NEVER_BLAME" awk '
+    function esecs(e,  d, t, x, a, n) { d = 0; t = e
+      if (e ~ /-/) { split(e, x, "-"); d = x[1]; t = x[2] }
+      n = split(t, a, ":")
+      return d*86400 + (n == 3 ? a[1]*3600 + a[2]*60 + a[3] : a[1]*60 + a[2]) }
+    # macOS ps prints TIME as MMMM:SS.ss and does NOT wrap minutes at 60
+    function csecs(t,  a) { split(t, a, ":"); return a[1]*60 + a[2] }
+    BEGIN { n = split(ENVIRON["MM"], L, "\n")
+      for (i = 1; i <= n; i++) { split(L[i], f, " "); pw[f[1]] = f[4] } }
+    { pid = $1; pp[pid] = $2; et[pid] = $3; tm[pid] = $4
+      name = $5; for (i = 6; i <= NF; i++) name = name " " $i
+      nm[pid] = name; order[++cnt] = pid }
+    END {
+      for (i = 1; i <= cnt; i++) {
+        pid = order[i]
+        if (nm[pid] ~ ENVIRON["NB"]) continue
+        r = pid; hops = 0
+        while ((pp[r] in nm) && pp[r] != r && pp[r] > 1 && hops < 12) { r = pp[r]; hops++ }
+        printf "%s\t%s\t%.1f\t%d\t%d\t%s\t%s\n",
+          r, pid, pw[pid]+0, csecs(tm[pid]), esecs(et[pid]), et[pid], nm[pid]
+      }
+    }')
+
+  # The impact of everything that can be blamed, which is what each app's
+  # share is measured against. Summed over every process, not only the ones
+  # big enough to be named below, so a long tail of small daemons is counted
+  # against the apps rather than quietly inflating them.
+  TOTAL_EI=$(printf '%s\n' "$PIDTBL" | awk -F'\t' '{t += $3} END{printf "%.1f", t+0}')
+
+  # Name only roots whose subtree could matter; whose() costs an lsof per call.
+  NAMES=""
+  for r in $(printf '%s\n' "$PIDTBL" | awk -F'\t' '{ tot[$1] += $3 } END { for (r in tot) if (tot[r] >= 1) print r }'); do
+    o=$(whose "$r"); [ -n "$o" ] || o=$(comm_of "$r" | short); [ -n "$o" ] || o="pid $r"
+    NAMES="${NAMES}${r}${TAB}${o}
+"
+  done
+
+  # Grouped by NAME rather than root pid, same as the memory rollup: two roots
+  # can answer to one app once a helper has been re-parented.
+  APPTBL=$(printf '%s\n' "$PIDTBL" | NM="$NAMES" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["NM"], L, "\n")
+      for (i = 1; i <= n; i++) { k = index(L[i], "\t"); if (k) app[substr(L[i], 1, k-1)] = substr(L[i], k+1) } }
+    $1 in app {
+      a = app[$1]
+      ei[a] += $3; cs[a] += $4; cnt[a]++
+      if ($5 >= old[a]) { old[a] = $5; oldage[a] = $6 }
+      if ($3 >= bigei[a]) { bigei[a] = $3; bigp[a] = $2; bign[a] = $7 }
+    }
+    END { for (a in ei) printf "%.1f\t%d\t%d\t%d\t%s\t%s\t%.1f\t%s\t%s\n",
+            ei[a], cnt[a], cs[a], old[a], oldage[a], bigp[a], bigei[a], bign[a], a }
+  ' | sort -t"$TAB" -k1,1nr)
+  PROCTBL=$(printf '%s\n' "$PIDTBL" | NM="$NAMES" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["NM"], L, "\n")
+      for (i = 1; i <= n; i++) { k = index(L[i], "\t"); if (k) app[substr(L[i], 1, k-1)] = substr(L[i], k+1) } }
+    ($1 in app) && $3 > 0 { printf "%s\t%s\t%s\t%s\t%s\n", app[$1], $2, $3, $6, $7 }
+  ' | sort -t"$TAB" -k1,1 -k3,3nr)
+
+  if [ "$JSON" -eq 1 ]; then
+    printf '{\n  "mode": "energy",\n'
+    printf '  "power": {"battery_present": %s, "on_battery": %s, "charging": %s, "charge_pct": %s, "time_left": "%s", "watts": %s, "watts_estimated": %s, "busy_cores": %s},\n' \
+      "$BATT_PRESENT" "$ON_BATTERY" "$CHARGING" "${CHARGE_PCT:-0}" \
+      "$(jesc "$(time_left_words "$TIME_LEFT")")" "${WATTS:-0}" "$WATTS_ESTIMATED" "${BUSY_CORES:-0}"
+    printf '  "apps": [\n'
+    first=1
+    while IFS=$TAB read -r ei cnt csec oldsec oldage bigp bigei bign appname; do
+      [ -n "$appname" ] || continue
+      mins=$(drain_mins "$ei" "$TOTAL_EI" "$WATTS")
+      drain=false; draining "$mins" "$csec" "$oldsec" && drain=true
+      [ $first -eq 1 ] || printf ',\n'
+      first=0
+      printf '    {"app": "%s", "minutes_per_hour": %s, "share_pct": %s, "processes": %s, "cpu_seconds": %s, "lifetime_seconds": %s, "oldest_age": "%s", "draining": %s, "procs": [' \
+        "$(jesc "$appname")" "$mins" \
+        "$(awk -v e="$ei" -v t="${TOTAL_EI:-0}" 'BEGIN{printf "%d", (t > 0) ? e*100/t : 0}')" \
+        "$cnt" "$csec" "$oldsec" "$(jesc "$(plain_age "$oldage")")" "$drain"
+      pfirst=1
+      while IFS=$TAB read -r _a ppid pei petime pname; do
+        [ -n "$ppid" ] || continue
+        [ $pfirst -eq 1 ] || printf ', '
+        pfirst=0
+        printf '{"pid": %s, "name": "%s", "minutes_per_hour": %s, "age": "%s"}' \
+          "$ppid" "$(jesc "$pname")" "$(drain_mins "$pei" "$TOTAL_EI" "$WATTS")" \
+          "$(jesc "$(plain_age "$petime")")"
+      done < <(printf '%s\n' "$PROCTBL" | awk -F'\t' -v a="$appname" '$1 == a' | head -8)
+      printf ']}'
+    done < <(printf '%s\n' "$APPTBL")
+    [ $first -eq 0 ] && printf '\n'
+    printf '  ]\n}\n'
+    exit 0
+  fi
+
+  echo
+  echo "🔋 ${BLD}Where your battery is going${NC}  ${DIM}every app's background pieces added up${NC}"
+  echo
+  # Watts are the one physical unit here a person has actually met — it is
+  # printed on their charger. Everything else is minutes.
+  watts_words=$(awk -v w="${WATTS:-0}" 'BEGIN{printf "%d", w + 0.5}')
+  if [ "$BATT_PRESENT" != true ]; then
+    echo "  This Mac runs off the wall, so nothing is draining. What follows is what"
+    echo "  each app would cost you on a laptop battery."
+  elif [ "$ON_BATTERY" = true ]; then
+    left=$(time_left_words "$TIME_LEFT")
+    echo "  On battery, ${BLD}${CHARGE_PCT}% left${NC}${left:+, $left to go}."
+    echo "  Your Mac is pulling about ${watts_words} watts right now."
+  else
+    charge=""; [ "$CHARGING" = true ] && charge=" and charging"
+    echo "  Plugged in${charge}, ${BLD}${CHARGE_PCT}%${NC}. Nothing is draining right now — what follows"
+    echo "  is what each app would cost you the moment you unplug."
+    echo "  Working this hard, your Mac would be pulling about ${watts_words} watts."
+  fi
+
+  # The headline. One sentence, naming one app, is the whole answer for most
+  # people; the table underneath is for the ones who want to see the working.
+  top_app=$(printf '%s\n' "$APPTBL" | head -1 | cut -f9)
+  top_ei=$(printf '%s\n' "$APPTBL" | head -1 | cut -f1)
+  top_mins=$(drain_mins "${top_ei:-0}" "$TOTAL_EI" "$WATTS")
+  if [ -n "$top_app" ] && [ "$(awk -v m="$top_mins" 'BEGIN{print (m >= 1) ? 1 : 0}')" = "1" ]; then
+    echo
+    echo "  ${BLD}${top_app} is the biggest drain on your Mac right now.${NC}"
+    if [ "$ON_BATTERY" = true ]; then
+      echo "  It is costing you $(mins_words "$top_mins") of battery every hour."
+    else
+      echo "  Unplugged, it would cost you $(mins_words "$top_mins") of battery every hour."
+    fi
+  fi
+  echo
+  [ -z "$APPTBL" ] && echo "  ${DIM}Could not read power use (is \`top\` unavailable?).${NC}"
+  # Anything under a minute an hour is not an answer to anybody's question, so
+  # the tail is added up in one line rather than listed. The table is sorted by
+  # cost, so the first app below the bar is where the list ends.
+  shown_ei=0; shown=0
+  while IFS=$TAB read -r ei cnt csec oldsec oldage bigp bigei bign appname; do
+    [ -n "$appname" ] || continue
+    mins=$(drain_mins "$ei" "$TOTAL_EI" "$WATTS")
+    [ "$(awk -v m="$mins" 'BEGIN{print (m >= 1) ? 1 : 0}')" = "1" ] || break
+    [ "$shown" -ge 10 ] && break
+    shown=$((shown+1))
+    shown_ei=$(awk -v a="$shown_ei" -v b="$ei" 'BEGIN{printf "%.1f", a+b}')
+    line="  $(printf '%-24s' "$appname") ${BLD}$(printf '%-25s' "$(drain_words "$mins")")${NC} ${DIM}$(count_unit "$cnt" process)${NC}"
+    if draining "$mins" "$csec" "$oldsec"; then
+      echo "$line  ${RED}← draining you${NC}"
+      echo "      ${DIM}hardest worker: $bign (pid $bigp), $(drain_words "$(drain_mins "$bigei" "$TOTAL_EI" "$WATTS")") on its own${NC}"
+    else
+      echo "$line"
+    fi
+  done < <(printf '%s\n' "$APPTBL")
+  [ -n "$APPTBL" ] && [ "$shown" -eq 0 ] &&
+    echo "  ${GRN}Nothing is using enough power to be worth naming.${NC}"
+  rest=$(drain_mins "$(awk -v t="${TOTAL_EI:-0}" -v s="${shown_ei:-0}" 'BEGIN{printf "%.1f", (t>s) ? t-s : 0}')" "$TOTAL_EI" "$WATTS")
+  [ "$(awk -v m="$rest" 'BEGIN{print (m >= 1) ? 1 : 0}')" = "1" ] &&
+    echo "  $(printf '%-24s' "Everything else") ${DIM}$(drain_words "$rest"), spread thin${NC}"
+  echo
+  echo "${DIM}These are estimates. Machogs takes what your Mac is drawing right now and${NC}"
+  echo "${DIM}splits it between apps by how hard each one is working, so treat them as${NC}"
+  echo "${DIM}a ranking you can trust and a number you should not quote to the minute.${NC}"
+  echo "${DIM}Your screen and the machine itself take the rest. This report closes${NC}"
+  echo "${DIM}nothing — quitting the app is what gets the battery back.${NC}"
   echo
   exit 0
 fi

@@ -52,7 +52,7 @@ struct MenuBarView: View {
             header.padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
                 .joyReveal(appeared, delay: 0)
 
-            Picker("MacHogs view", selection: $workspace) {
+            Picker("Machogs view", selection: $workspace) {
                 Label(hogsTabTitle, systemImage: "sparkles").tag(MenuWorkspace.hogs)
                 Label(storageTabTitle, systemImage: "internaldrive").tag(MenuWorkspace.storage)
                 Label(portsTabTitle, systemImage: "cable.connector").tag(MenuWorkspace.ports)
@@ -109,7 +109,7 @@ struct MenuBarView: View {
         HStack(spacing: 9) {
             PigMascot(mood: mascotMood, size: 44)
             VStack(alignment: .leading, spacing: 1) {
-                Text("MacHogs").font(.headline)
+                Text("Machogs").font(.headline)
                 Text(headerDetail).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -171,7 +171,7 @@ struct MenuBarView: View {
                     .hoverLift()
                 }
                 if rankedGroups.count > 4 {
-                    Button("View \(rankedGroups.count - 4) more groups in MacHogs") { openMain(.now) }
+                    Button("View \(rankedGroups.count - 4) more groups in Machogs") { openMain(.now) }
                         .buttonStyle(.link)
                 }
                 if rankedGroups.count >= 2 {
@@ -190,7 +190,7 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(PigActionStyle(tint: .pink))
                     .disabled(model.isStale || model.isActing)
-                    .accessibilityLabel("Close everything MacHogs found")
+                    .accessibilityLabel("Close everything Machogs found")
                 }
             }
         }
@@ -203,7 +203,7 @@ struct MenuBarView: View {
             Spacer()
             Button("Fix") { settings.openNotificationSettings() }
                 .buttonStyle(.link).font(.caption)
-                .accessibilityLabel("Open notification settings for MacHogs")
+                .accessibilityLabel("Open notification settings for Machogs")
         }
     }
 
@@ -240,7 +240,7 @@ struct MenuBarView: View {
 
     @ViewBuilder private var storageView: some View {
         if model.diskReport == nil && model.isLoadingDisk {
-            MenuLoading(title: "Measuring storage…", detail: "This takes about 15 seconds. You can keep using MacHogs.")
+            MenuLoading(title: "Measuring storage…", detail: "This takes about 15 seconds. You can keep using Machogs.")
         } else if let report = model.diskReport {
             let safeItems = report.items.filter { $0.verdict == "safe" }.sorted { $0.sizeMB > $1.sizeMB }
             VStack(alignment: .leading, spacing: 12) {
@@ -265,15 +265,15 @@ struct MenuBarView: View {
                                 openMain(.storage)
                                 model.requestDiskReview(item)
                             } label: {
-                                Label("Review clearing in MacHogs…", systemImage: "arrow.up.forward.app")
+                                Label("Review clearing in Machogs…", systemImage: "arrow.up.forward.app")
                             }
                             .buttonStyle(.link)
-                            .accessibilityLabel("Review clearing \(item.label) in MacHogs")
+                            .accessibilityLabel("Review clearing \(item.label) in Machogs")
                         }
                     }
                 }
                 if safeItems.isEmpty {
-                    Text("MacHogs measured the usual cache locations and found no useful win.")
+                    Text("Machogs measured the usual cache locations and found no useful win.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -282,7 +282,7 @@ struct MenuBarView: View {
                 Task { await model.loadDisk() }
             }
         } else {
-            MenuLoading(title: "Opening storage…", detail: "MacHogs only measures after you ask.")
+            MenuLoading(title: "Opening storage…", detail: "Machogs only measures after you ask.")
         }
     }
 
@@ -307,14 +307,14 @@ struct MenuBarView: View {
                         }
                     }
                 }
-                Button("View all ports in MacHogs") { openMain(.ports) }.buttonStyle(.link)
+                Button("View all ports in Machogs") { openMain(.ports) }.buttonStyle(.link)
             }
         } else if let error = model.portsError {
             MenuState(symbol: "network.slash", title: "Ports check failed", detail: error) {
                 Task { await model.loadPorts() }
             }
         } else {
-            MenuLoading(title: "Opening ports…", detail: "MacHogs checks only when you open this tab.")
+            MenuLoading(title: "Opening ports…", detail: "Machogs checks only when you open this tab.")
         }
     }
 
@@ -328,7 +328,7 @@ struct MenuBarView: View {
             Menu {
                 Button("Settings") { openMain(.settings) }
                 Divider()
-                Button("Quit MacHogs") { NSApp.terminate(nil) }
+                Button("Quit Machogs") { NSApp.terminate(nil) }
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize().help("More")
         }
@@ -567,8 +567,8 @@ private struct MenuPortRow: View {
                 }
                     .buttonStyle(PigActionStyle(tint: .pink))
                     .disabled(disabled)
-                    .help("Open a fresh safety review in MacHogs")
-                    .accessibilityLabel("Review freeing port \(item.port) from \(item.process) in MacHogs")
+                    .help("Open a fresh safety review in Machogs")
+                    .accessibilityLabel("Review freeing port \(item.port) from \(item.process) in Machogs")
             }
         }
     }
