@@ -116,11 +116,11 @@ public final class AppModel: ObservableObject {
     public func scan() async {
         guard !isScanning else { return }
         isScanning = true
-        scanError = nil
         defer { isScanning = false }
         do {
             let fresh = try await service.scan()
             report = fresh
+            scanError = nil
             lastSuccessfulScan = Date()
             watchdogEvent = watchdog.evaluate(fresh)
         } catch {

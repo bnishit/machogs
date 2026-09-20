@@ -63,7 +63,19 @@ public struct EngineReport: Codable, Equatable, Sendable {
     public let findings: [Finding]
 
     public var actionableFindings: [Finding] {
-        findings.filter { $0.action.isActionable }
+        let protected = Set(protectedFindings.map { ProcessTarget(pid: $0.pid, identity: $0.identity) })
+        var unique: [ProcessTarget: Finding] = [:]
+        for finding in findings where finding.action.isActionable {
+            let target = ProcessTarget(pid: finding.pid, identity: finding.identity)
+            guard !protected.contains(target) else { continue }
+            // Detector rules can overlap. Keep one measured sample per process;
+            // the first row wins ties so its story stays stable.
+            if let previous = unique[target], previous.cpu >= finding.cpu { continue }
+            unique[target] = finding
+        }
+        return unique.values.sorted {
+            $0.pid == $1.pid ? $0.identity < $1.identity : $0.pid < $1.pid
+        }
     }
 
     public var protectedFindings: [Finding] {

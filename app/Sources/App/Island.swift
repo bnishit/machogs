@@ -177,7 +177,7 @@ private struct IslandView: View {
         .contentShape(RoundedRectangle(cornerRadius: 28))
         .onTapGesture {
             // The pill is the teaser; the tap is the full story.
-            NSWorkspace.shared.open(URL(string: "machogs://bust")!)
+            NSWorkspace.shared.open(URL(string: "\(MachogsBuild.urlScheme)://bust")!)
             leave()
         }
     }
