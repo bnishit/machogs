@@ -51,14 +51,15 @@ final class UsageAnalyticsTests: XCTestCase {
         for (request, event) in zip(requests, events) {
             XCTAssertEqual(Set(event.keys), ["api_key", "event", "uuid", "timestamp", "properties"])
             let properties = try XCTUnwrap(event["properties"] as? [String: Any])
-            XCTAssertEqual(Set(properties.keys), ["distinct_id", "app_version", "platform", "environment",
+            XCTAssertEqual(Set(properties.keys), ["distinct_id", "app_version", "product", "platform", "environment",
                 "installation_kind", "$process_person_profile", "$geoip_disable", "$ip"])
             XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(properties["distinct_id"] as? String)))
             XCTAssertEqual(properties["platform"] as? String, "macOS")
+            XCTAssertEqual(properties["product"] as? String, "machogs")
             XCTAssertEqual(properties["installation_kind"] as? String, "existing_install")
             XCTAssertEqual(properties["$process_person_profile"] as? Bool, false)
             XCTAssertEqual(properties["$geoip_disable"] as? Bool, true)
-            XCTAssertTrue(properties["$ip"] is NSNull)
+            XCTAssertEqual(properties["$ip"] as? String, "0.0.0.0")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.timeoutInterval, 5)
         }

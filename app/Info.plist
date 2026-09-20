@@ -32,7 +32,7 @@
 	<key>MachogsAnalyticsHost</key>
 	<string>https://us.i.posthog.com</string>
 	<key>MachogsAnalyticsToken</key>
-	<string></string>
+	<string>phc_NKeUtSphlVzbxyDgYR58znBU0M0gAv6yjldCx65AOg4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>

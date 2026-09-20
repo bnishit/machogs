@@ -125,9 +125,9 @@ public final class UsageAnalytics {
         guard isCurrent(expected), let state else { return false }
         let properties: [String: Any] = [
             "distinct_id": state.id, "app_version": configuration.appVersion,
-            "platform": "macOS", "environment": configuration.environment.rawValue,
+            "product": "machogs", "platform": "macOS", "environment": configuration.environment.rawValue,
             "installation_kind": state.installationKind.rawValue,
-            "$process_person_profile": false, "$geoip_disable": true, "$ip": NSNull()
+            "$process_person_profile": false, "$geoip_disable": true, "$ip": "0.0.0.0"
         ]
         let body: [String: Any] = [
             "api_key": configuration.projectToken, "event": event, "uuid": pending.id,

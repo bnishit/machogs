@@ -25,7 +25,7 @@
       properties: {
         product: 'machogs', platform: 'web', environment: test ? 'test' : 'production',
         app_version: config.version, ...(placement ? {placement} : {}),
-        $process_person_profile: false, $geoip_disable: true, $ip: null
+        $process_person_profile: false, $geoip_disable: true, $ip: '0.0.0.0'
       }
     };
     fetch(config.host + '/i/v0/e/', {

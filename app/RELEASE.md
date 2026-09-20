@@ -97,16 +97,20 @@ download. Publishing is deliberately outside these scripts.
 
 Machogs 1.4 adds optional usage analytics through PostHog. The default is off.
 The app sends only a random installation identifier, version, installation kind
-(new or existing), environment, event UUID/time, first opted-in use, and one event
+(new or existing), product, environment, event UUID/time, first opted-in use, and one event
 per UTC ISO week with foreground use. It never sends process names, file paths,
 scan results, messages, or cleanup receipts. No autocapture, replay, crash SDK,
 or advertising identifiers are used. Scans and background polling do not count
 as active use. Turning sharing off cancels pending requests and clears the local
 analytics identifier and delivery state; already received events are not erased.
 
-Before enabling a destination, turn on PostHog's **Discard client IP data** setting
-and verify ingested test events. Both clients disable GeoIP enrichment and person
-profiles. A network provider still sees the source IP while handling a request.
+The owner approved shared PostHog project 39922; do not change global settings.
+Both clients disable GeoIP enrichment and person profiles, and send the fixed
+$ip placeholder 0.0.0.0. Live QA confirmed that placeholder is stored without a
+country or person profile; $ip:null instead stored the source IP. Verify ingested
+test events before release. Dashboards must filter product=machogs and
+environment=production. A network provider still sees the source IP while
+handling a request.
 The website has a separate optional choice; app and website IDs are not joined.
 See `docs/privacy.html` for the user-facing disclosure and `docs/analytics.md`
 for the measurement contract and verification steps.

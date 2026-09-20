@@ -72,7 +72,8 @@ test('only allowed event fields are sent, with no URL, query, referrer or browse
     assert.equal(payload.properties.environment, 'production');
     assert.equal(payload.properties.$process_person_profile, false);
     assert.equal(payload.properties.$geoip_disable, true);
-    assert.equal(payload.properties.$ip, null);
+    assert.equal(payload.properties.$ip, '0.0.0.0');
+    assert.equal(payload.properties.product, 'machogs');
     assert.equal(init.credentials, 'omit');
     assert.equal(init.referrerPolicy, 'no-referrer');
     assert.doesNotMatch(init.body, /private|secret|referrer|https?:\/\//);
