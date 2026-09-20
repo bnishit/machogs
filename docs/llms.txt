@@ -8,9 +8,9 @@
 
 ## Install the native Mac app
 
-Download Machogs 1.2.1:
+Download Machogs 1.3.0:
 
-    https://github.com/bnishit/machogs/releases/download/v1.2.1/Machogs-1.2.1.dmg
+    https://github.com/bnishit/machogs/releases/download/v1.3.0/Machogs-1.3.0.dmg
 
 Open the DMG and drag Machogs to Applications. The app supports Apple silicon
 and Intel. Its first scan is read-only. One-tap Close actions re-verify every target
@@ -116,7 +116,7 @@ findings are not counted unless `--dupes` is present. Always read `findings`.
 
 ## Native app status
 
-Machogs 1.2.1 is the public native app release. Its Developer ID-signed
+Machogs 1.3.0 is the public native app release. Its Developer ID-signed
 universal DMG is linked above. The app has a normal window,
 menu-bar Hogs, Storage and Ports views, Receipts, and Settings. Verified native
 behavior: one-tap Close re-verifies targets with the engine before acting; process and port
