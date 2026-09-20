@@ -2,7 +2,7 @@
 
 **Finds the hog. Names the app. Closes nothing without you.**
 
-**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.2.1/Machogs-1.2.1.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 > [!IMPORTANT]
 > The native Mac app is available as a signed and notarized universal download.
@@ -160,7 +160,7 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ## Install the Mac app
 
-[Download Machogs 1.2.0](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg), open the DMG, and drag Machogs to Applications.
+[Download Machogs 1.2.1](https://github.com/bnishit/machogs/releases/download/v1.2.1/Machogs-1.2.1.dmg), open the DMG, and drag Machogs to Applications.
 
 The app is signed with Developer ID, notarized by Apple, and includes both
 Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
@@ -274,8 +274,8 @@ hurting you:
 
 - **It never closes anything on its own.** Running `machogs` only looks. `fix`
   asks you about every single item.
-- **It will never close a coding session.** Claude Code sessions, and the
-  helpers belonging to a live one, are listed and skipped. You do not lose
+- **It will never close a coding session.** Codex and Claude Code sessions, and their
+  helpers, are listed and skipped. You do not lose
   unsaved work.
 - **It only touches your own programs.** macOS system processes are out of
   scope entirely.

@@ -429,14 +429,23 @@ SELF_SAFE=" $(ancestry $$ | tr '\n' ' ') "
 claude_app_pids() { pgrep -f "claude-code/.*MacOS/claude|Claude\.app/Contents/MacOS/Claude" 2>/dev/null; }
 CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
 
+# A running coding app or CLI can hold unsaved work even when its transcript
+# is old, missing, or stored elsewhere. Protect it and all its descendants.
+# ChatGPT also hosts coding helpers in older installs.
+codex_app_pids() {
+  pgrep -f '(^|/)(Codex|ChatGPT)\.app/Contents/|(^|/)(codex|codex-aarch64-apple-darwin|codex-x86_64-apple-darwin)([[:space:]]|$)' 2>/dev/null
+}
+AGENT_SAFE=" $(codex_app_pids | tr '\n' ' ') "
+
 protected() {
   local pid=$1 a
   # protected if the process itself, OR any of its ancestors, is our own
-  # session or a live Claude Code session. This is the net that stops us
+  # session or a running coding app / CLI. This is the net that stops us
   # reaping the MCP servers belonging to sessions you're actively coding in.
   for a in $pid $(ancestry "$pid"); do
     case "$SELF_SAFE"   in *" $a "*) return 0 ;; esac
     case "$CLAUDE_SAFE" in *" $a "*) return 0 ;; esac
+    case "$AGENT_SAFE"  in *" $a "*) return 0 ;; esac
   done
   return 1
 }
@@ -790,6 +799,7 @@ if [ "$MODE" = check ]; then
   echo "${BLD}=== machogs --check ===${NC}  ${DIM}safety audit, kills nothing${NC}"
   echo "  own ancestry protected : $(echo $SELF_SAFE | wc -w | tr -d ' ') pids"
   echo "  Claude Code protected  : $(echo $CLAUDE_SAFE | wc -w | tr -d ' ') pids"
+  echo "  Codex / ChatGPT protected: $(echo $AGENT_SAFE | wc -w | tr -d ' ') pids"
   echo
   printf "  %-8s %-11s %-18s %s\n" PID VERDICT OWNER COMMAND
   for pid in $(pgrep -f "$MCP_PATTERNS" 2>/dev/null); do
@@ -800,7 +810,7 @@ if [ "$MODE" = check ]; then
     printf "  %-8s %-22b %-18s %s\n" "$pid" "$v" "${owner:-?}" "$(sig_of "$pid")"
   done
   echo
-  echo "  ${DIM}Anything owned by Claude Code must read PROTECTED.${NC}"
+  echo "  ${DIM}Anything owned by Claude Code or Codex must read PROTECTED.${NC}"
   exit 0
 fi
 
@@ -829,7 +839,7 @@ queue() {
   case " $QUEUED_PIDS " in *" $pid "*) return ;; esac
   QUEUED_PIDS="$QUEUED_PIDS $pid"
   if protected "$pid"; then
-    printf "    %sskip%s %-7s %s ${DIM}(protected: own session / Claude Code)${NC}\n" "$DIM" "$NC" "$pid" "$reason"
+    printf "    %sskip%s %-7s %s ${DIM}(protected: own session / coding app)${NC}\n" "$DIM" "$NC" "$pid" "$reason"
     row "$pid" "$SECTION" "protected" "$(cpu_of $pid)" "$(etime_of $pid)" "$reason"
     return
   fi
@@ -1011,8 +1021,15 @@ while IFS=$'\t' read -r gp sig; do
     else
       printf "    %s%-7s%s cpu=%-5s age=%-12s duplicate %s under %s ${DIM}(--dupes to kill)${NC}\n" \
         "$BLD" "$pid" "$NC" "$(cpu_of $pid)%" "$(etime_of $pid)" "$sig" "$owner"
-      # reported but not queued: killing these needs --dupes
-      row "$pid" "$SECTION" "needs-dupes-flag" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      # reported but not queued: killing these needs --dupes. The protection
+      # check still has to happen here, because this path skips queue() and
+      # therefore skips protected() — that gap is how helpers belonging to a
+      # session someone was actively working in got reported as closeable.
+      if protected "$pid"; then
+        row "$pid" "$SECTION" "protected" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      else
+        row "$pid" "$SECTION" "needs-dupes-flag" "$(cpu_of $pid)" "$(etime_of $pid)" "duplicate $sig under $owner"
+      fi
     fi
   done
 done < <(echo "$TBL" | awk -F'\t' 'NF{print $1"\t"$2}' | sort -u)

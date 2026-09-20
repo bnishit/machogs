@@ -36,7 +36,7 @@ Use `machogs kill` for unattended work.
 - **Never run `kill` before the user has seen the findings and agreed.** A
   finding is a suggestion, not a verdict. Processes may hold unsaved work.
 - **Never work around the protections.** If a process reads `protected`, the
-  script is refusing on purpose — it belongs to a live Claude Code session.
+  script is refusing on purpose — it belongs to a running coding session.
   Do not kill it by hand with `kill -9` instead.
 - **Never claim the machine is fixed because processes died.** If
   `host.swap_pct` is above 80, the machine is thrashing and only a reboot
@@ -92,7 +92,7 @@ Enough to act on without parsing anything.
 | `reapable` | `kill` would take this. Show it to the user first. |
 | `needs-dupes-flag` | Only killed if you pass `--dupes`. Mention that. |
 | `protected` | Refused on purpose. Leave it alone. |
-| `never-killed` | A live Claude Code session. Report only. |
+| `never-killed` | A live coding session. Report only. |
 | `killed` | Actually reaped during this run. |
 
 ### `section`
@@ -111,7 +111,7 @@ Enough to act on without parsing anything.
 
 If a user doubts the tool, run `machogs --check`. It lists every automation
 process and whether the script would refuse to kill it, and why. It kills
-nothing. Anything owned by Claude Code must read `PROTECTED`.
+nothing. Anything owned by Codex or Claude Code must read `PROTECTED`.
 
 ## Reading the result honestly
 
