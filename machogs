@@ -4,34 +4,33 @@
 # Slow, hot, loud fan, battery gone by lunch: usually one program eating a CPU
 # core that nobody is using any more. This finds it and tells you in plain words.
 #
-#   machogs                 plain answer (default, never closes anything)
-#   machogs fix             go through them one at a time, asking before each
-#   machogs blame           scoreboard: which app leaves the most junk behind
-#   machogs brag            a shareable card of what your Mac has wasted
-#   machogs disk            where your storage went (report-only, deletes nothing)
-#   machogs ports           every port in use and what is squatting it
-#   machogs port 3000       who holds port 3000;  add `kill` to free it
-#   machogs --details       the technical report, by category
-#   machogs kill            close everything reapable, no questions (scripts)
-#   machogs kill --dupes    also close duplicate MCP servers (keeps newest)
-#   machogs plan --target=123:ID  recheck reviewed process identities (app JSON)
-#   machogs kill --target=123:ID  close only identities returned by a fresh plan
-#   machogs --sessions      list Claude Code sessions too (never closed)
-#   machogs --json          machine-readable output, for agents (see below)
+# START HERE — scan, review, then choose
+#   machogs                 scan only; nothing closes
+#   machogs fix             review each group: yes, skip, or quit
 #
-# FOR AGENTS: `--json` prints one JSON object on stdout and nothing else, so it
-# can be parsed without scraping colours or column layout. Exit codes carry the
-# verdict, so a wrapper does not have to parse anything at all:
-#   0  clean — nothing worth reaping (or: kill finished)
-#  10  findings exist, report mode — a human should look
-#   2  bad arguments
-# --json is a reporting flag. It never kills on its own; pair it with `kill`.
+# LOOK AROUND — these commands change nothing
+#   machogs disk            see where storage went
+#   machogs ports           list listening ports and their owners
+#   machogs port 3000       inspect one port
+#   machogs blame           see which apps left the most behind
+#   machogs brag            print a shareable cleanup receipt
+#   machogs --details       technical findings by category
+#   machogs --check         audit process protections
+#   machogs --sessions      include Claude Code session details
+#   machogs --json --sessions  scan for an agent; read AGENTS.md first
 #
-# SAFETY RULES, in order of importance:
-#   1. Never kills anything in this script's own process ancestry.
-#   2. Never kills a Claude Code session. Ever. It only reports them.
-#      (You code in the Claude app — killing a session loses live work.)
-#   3. Report mode is the default. `kill` is always explicit.
+# EXPLICIT ACTIONS — run only after reviewing and agreeing
+#   machogs kill            close all eligible findings WITHOUT asking
+#   machogs kill --dupes    also close duplicate helpers (keeps newest)
+#   machogs port 3000 kill  close an eligible listener WITHOUT asking
+#   machogs disk clear "/exact/path"  clear one reported safe cache or Trash
+#   machogs plan --json --target=123:ID  recheck a reviewed process identity
+#   machogs kill --json --target=123:ID  close only that reviewed identity
+#
+# Enter skips in fix; q stops the review. Closing can lose unsaved work.
+# Live coding sessions and their helpers are protected. The CLI sends no analytics.
+# Exit codes: 0 completed/clean; 10 report has findings (not a crash);
+#             2 invalid usage; 3 disk clear refused or target missing.
 #
 # Section 1 only catches runaways whose PARENT DIED. That missed the real
 # thing (a plugin server spinning at 90% for four days under a live wrapper),
@@ -100,7 +99,7 @@ for a in "$@"; do
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
     --details)   DETAILS=1 ;;
-    -h|--help)   sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,/^# Section 1/{ /^# Section 1/d; s/^# \{0,1\}//; p; }' "$0"; exit 0 ;;
     *) echo "unknown arg: $a (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -128,7 +127,8 @@ if [ "$MODE" = fix ]; then HUMAN=1; fi
 
 if [ "$MODE" = fix ] && [ ! -t 0 ]; then
   echo "machogs fix needs a terminal to ask you questions." >&2
-  echo "For unattended use run: machogs kill" >&2
+  echo "Run machogs to scan only, then open a terminal for machogs fix." >&2
+  echo "Agents: use machogs --json --sessions and obtain approval before any kill." >&2
   exit 2
 fi
 
@@ -850,10 +850,10 @@ queue() {
 }
 
 flush_kills() {
-  [ "$MODE" = kill ] || return
+  [ "$MODE" = kill ] || { [ "$MODE" = fix ] && [ "${1:-}" = reviewed ]; } || return
   [ ${#KILL_LIST[@]} -eq 0 ] && return
   echo
-  echo "  ${YLW}killing ${#KILL_LIST[@]} process(es)...${NC}"
+  echo "  ${YLW}Checking ${#KILL_LIST[@]} eligible process(es) before closing...${NC}"
   local entry pid identity reason
   for entry in "${KILL_LIST[@]}"; do
     pid=${entry%%|*}; entry=${entry#*|}; identity=${entry%%|*}; reason=${entry#*|}
@@ -882,6 +882,35 @@ flush_kills() {
     fi
   done
   KILL_LIST=()
+}
+
+# Reuse the guarded close path, restricted to this approved group's scan identities.
+close_reviewed_group() {
+  local p identity
+  CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
+  AGENT_SAFE=" $(codex_app_pids | tr '\n' ' ') "
+  KILL_LIST=()
+  for p in $1; do
+    identity=$(awk -F'\t' -v p="$p" '$1==p && $3=="reapable" {print $8; exit}' "$ROWS")
+    [ -n "$identity" ] || continue
+    KILL_LIST+=("$p|$identity|reviewed finding")
+  done
+  flush_kills reviewed
+}
+
+# Return 0 to close, 1 to skip, 2 to end review. EOF also stops safely.
+ask_close() {
+  local count=$1 ans
+  while true; do
+    printf "  Close %s? [y/N/q] " "$(count_unit "$count" program)"
+    read -r ans || return 2
+    case "$ans" in
+      y|Y|yes|YES) return 0 ;;
+      ''|n|N|no|NO) return 1 ;;
+      q|Q|quit|QUIT) return 2 ;;
+      *) echo "  Choose y to close, Enter to skip, or q to stop." ;;
+    esac
+  done
 }
 
 # Printing a section header is also what sets the section id used by row(), so
@@ -1227,7 +1256,8 @@ if [ "$HUMAN" -eq 1 ]; then
 
     if [ "$MODE" = fix ]; then
       echo "${E_BROOM}${BLD}Found $(count_unit "$ngroups" thing) worth closing.${NC}"
-      echo "${DIM}I will ask before each one. Nothing closes unless you say yes.${NC}"
+      echo "${DIM}Enter skips. q stops. Nothing closes unless you say yes.${NC}"
+      echo "${DIM}Save your work first; closing a program can lose unsaved changes.${NC}"
     elif [ "${hot:-0}" -gt 1 ]; then
       echo "${E_PIG}${BLD}Found the hogs.${NC} ${DIM}Caught in 4K. Receipts below.${NC}"
     elif [ "${hot:-0}" -gt 0 ]; then
@@ -1246,25 +1276,19 @@ if [ "$HUMAN" -eq 1 ]; then
       say_group "$sec" "$what" "$owner" "$count" "$cpu" "$age"
       if [ "$MODE" = fix ]; then
         echo
-        if [ "$count" -gt 1 ]; then
-          printf "  Close all %s? [y/N] " "$count"
-        else
-          printf "  Close it? [y/N] "
-        fi
-        read -r ans </dev/tty
-        case "$ans" in
-          y|Y|yes|YES)
-            for p in $pidlist; do
-              alive "$p" || continue
-              if kill -9 "$p" 2>/dev/null; then
-                closed=$((closed+1))
-                logclose "$p" "$owner" "$what" "$cpu" "$scsec"
-              fi
-            done
-            freed_cpu=$(awk -v a="$freed_cpu" -v b="$scpu" 'BEGIN{printf "%.1f", a+b}')
-            freed_csec=$((freed_csec + scsec))
-            echo "  ${GRN}Closed.${NC}" ;;
-          *) echo "  ${DIM}Left alone.${NC}" ;;
+        ask_close "$count" </dev/tty
+        choice=$?
+        case "$choice" in
+          0)
+            before_closed=$KILLED
+            close_reviewed_group "$pidlist"
+            group_closed=$((KILLED - before_closed))
+            closed=$KILLED; freed_cpu=$FREED_CPU; freed_csec=$FREED_CSEC
+            echo "  Closed $group_closed of $count programs."
+            [ "$group_closed" -eq "$count" ] || echo "  Others were left alone: gone, changed, protected, or could not close."
+            ;;
+          1) echo "  ${DIM}Left alone.${NC}" ;;
+          2) echo "  ${DIM}Review stopped. Remaining programs left alone.${NC}"; break ;;
         esac
       fi
       echo
@@ -1273,7 +1297,7 @@ if [ "$HUMAN" -eq 1 ]; then
     if [ "$MODE" = fix ]; then
       if [ "$closed" -gt 0 ]; then
         receipt "$freed_cpu" "$freed_csec" "$closed"
-        [ "${hot:-0}" -gt 0 ] && echo "Your fan should quiet down over the next few minutes."
+        awk -v cpu="$freed_cpu" 'BEGIN {exit !(cpu >= 20)}' && echo "If these were causing the heat, your fan may settle over the next few minutes."
       else
         echo "${DIM}Nothing was closed.${NC}"
       fi
@@ -1299,8 +1323,6 @@ if [ "$HUMAN" -eq 1 ]; then
   fi
   echo
 
-  # kills in fix mode are counted here, not by flush_kills
-  KILLED=$((KILLED + ${closed:-0}))
   if [ "$MODE" = report ] && [ "${n:-0}" -gt 0 ]; then exit 10; fi
   exit 0
 fi
