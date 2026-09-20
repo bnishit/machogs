@@ -44,6 +44,10 @@ struct MainWindow: View {
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 9) {
+                    PigMascot(mood: .curious, size: 32)
+                    Text("machogs").font(.system(size: 21, weight: .bold, design: .rounded))
+                }.padding(.vertical, 10)
                 SidebarSection(title: "MAC", pages: [.now, .storage], router: router, badge: badge)
                     .joyReveal(appeared, delay: 0)
                 SidebarSection(title: "TOOLS", pages: [.ports], router: router, badge: badge)
@@ -52,15 +56,14 @@ struct MainWindow: View {
                     .joyReveal(appeared, delay: 0.1)
                 Spacer()
                 VStack(spacing: 5) {
-                    PigMascot(mood: .pleased, size: 44)
-                    Text("Apps leave messes. The pig finds them.")
-                        .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                    Image(systemName: "lock.shield").font(.title3).foregroundStyle(.secondary)
+                    Text(Bundle.main.bundleIdentifier == "com.bnishit.machogs.design" ? "Design preview · Local build" : "Your work stays yours.")
+                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .joyReveal(appeared, delay: 0.15)
             }
             .padding(12)
-            .background(.ultraThinMaterial)
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
         } detail: {
             VStack(spacing: 0) {
@@ -84,7 +87,8 @@ struct MainWindow: View {
             }
             .navigationTitle(router.page.title)
         }
-        .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
+        .tint(MachogsPalette.rose)
+        .frame(minWidth: 820, idealWidth: 980, minHeight: 600, idealHeight: 740)
         .overlay { ConfettiBurst(trigger: celebrationTrigger) }
         .sheet(item: reviewBinding) { review in
             ReviewSheet(review: review, model: model)
@@ -94,7 +98,7 @@ struct MainWindow: View {
             appeared = true
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow, window.contentView?.frame.width ?? 0 < 820 else { return }
-                window.setContentSize(NSSize(width: 900, height: 680))
+                window.setContentSize(NSSize(width: 980, height: 740))
                 window.center()
             }
         }
@@ -160,162 +164,6 @@ private struct SidebarSection: View {
     }
 }
 
-struct NowPage: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Your Mac, right now").font(.largeTitle.bold())
-                StatusHero(model: model)
-                if model.hasSwapPressure { memoryWarning }
-                findings
-                if let report = model.report {
-                    DisclosureGroup("Mac details") { vitals(report.host).padding(.top, 10) }
-                        .font(.callout.weight(.semibold)).padding(.horizontal, 4)
-                }
-            }
-            .padding(20)
-        }
-        .overlay { if model.isScanning && model.report == nil { ProgressView("Checking what your apps left behind…") } }
-    }
-
-    private var findings: some View {
-        GroupBox {
-            if model.groups.isEmpty {
-                EmptyState(
-                    symbol: "checkmark.seal",
-                    title: model.report == nil ? "No fresh scan yet" : "Nothing is hogging your Mac",
-                    detail: model.report == nil
-                        ? "Machogs needs a successful read-only scan before it can give an answer."
-                        : "No stuck or abandoned programs are running. If the Mac still feels slow, the cause is elsewhere."
-                )
-            } else {
-                VStack(spacing: 0) {
-                    if model.groups.count > 1 {
-                        HStack {
-                            Text("\(model.groups.reduce(0) { $0 + $1.count }) items can be closed")
-                                .font(.callout).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Close \(model.groups.reduce(0) { $0 + $1.count }) unused things 💥") {
-                                Task { await model.closeEverythingNow() }
-                            }
-                            .disabled(model.isStale || model.isActing)
-                        }
-                        .padding(.bottom, 10)
-                    }
-                    ForEach(Array(model.groups.enumerated()), id: \.element.id) { index, group in
-                        if index > 0 { Divider() }
-                        FindingRow(group: group, disabled: model.isStale || model.isActing) {
-                            Task { await model.closeGroupNow(group) }
-                        }
-                    }
-                }
-            }
-        } label: {
-            Label("What apps left behind", systemImage: "waveform.path.ecg")
-                .font(.headline)
-        }
-    }
-
-    private func vitals(_ host: HostSnapshot) -> some View {
-        HStack(spacing: 12) {
-            MetricCard(title: "Work level", value: String(format: "%.1f", host.load), detail: "across \(host.cores) CPU cores", symbol: "cpu")
-            MetricCard(title: "Disk-backed memory", value: "\(host.swapPercent)%", detail: "of backup memory in use", symbol: "memorychip")
-            MetricCard(title: "Time since restart", value: "\(host.uptimeDays)d", detail: "days", symbol: "clock")
-        }
-    }
-
-    private var memoryWarning: some View {
-        GroupBox {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title2).foregroundStyle(.orange).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Restart recommended").font(.headline)
-                    Text("Your Mac has been running for \(model.report?.host.uptimeDays ?? 0) days and is using slower disk space as backup memory. Save your work, then choose Apple menu › Restart. Cleaning the items below will not fix this.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-}
-
-struct StatusHero: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                PigMascot(mood: mascotMood, size: 66)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(.system(size: 29, weight: .bold, design: .rounded))
-                    Text(detail).foregroundStyle(.secondary)
-                    if let date = model.lastSuccessfulScan {
-                        Text("Last checked \(date.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .accessibilityElement(children: .combine)
-            Spacer()
-            Button { Task { await model.scan() } } label: {
-                if model.isScanning {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Check again", systemImage: "arrow.clockwise")
-                }
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(model.isScanning)
-        }
-        .padding(18)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [color.opacity(0.16), Color.pink.opacity(0.035)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: color.opacity(0.09), radius: 18, y: 8)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(color.opacity(0.18)))
-    }
-
-    private var title: String {
-        if model.scanError != nil { return model.isStale ? "Last result is stale" : "Machogs could not check" }
-        if model.isStale { return "These results are old" }
-        if let first = model.groups.first {
-            let owner = first.owner.isEmpty ? "An app" : first.owner
-            return first.isHot ? "\(owner) is keeping your Mac busy" : "\(owner) left \(first.count) thing\(first.count == 1 ? "" : "s") running"
-        }
-        if model.report != nil { return "No hogs hiding here" }
-        return "Checking what your apps left behind"
-    }
-
-    private var detail: String {
-        if model.isStale { return "The last check is still shown, but actions are paused until MacHogs can check again." }
-        if let error = model.scanError { return "Nothing changed. Try again. \(error)" }
-        if model.hasHotFinding { return "It is working hard enough to cause heat or fan noise. You can close it after one final safety check." }
-        if !model.groups.isEmpty { return "It is idle. It can use memory, but it is not heating your Mac." }
-        return model.report == nil ? "This check is read-only. Nothing can close." : "Nothing stuck or abandoned needs your attention."
-    }
-
-    private var color: Color {
-        if model.scanError != nil { return .orange }
-        if model.hasHotFinding { return .red }
-        return model.groups.isEmpty ? .green : .orange
-    }
-
-    private var mascotMood: PigMood {
-        if model.scanError != nil || model.hasHotFinding { return .concerned }
-        if model.isScanning || model.report == nil { return .sniffing }
-        return model.groups.isEmpty ? .pleased : .curious
-    }
-}
-
 struct FindingRow: View {
     let group: FindingGroup
     let disabled: Bool
@@ -338,7 +186,7 @@ struct FindingRow: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Button("Close \(group.count) 💥", action: review)
+            Button("Review \(group.count)", action: review)
                 .disabled(disabled)
         }
         .padding(.vertical, 12)
@@ -393,7 +241,7 @@ struct PortSection: View {
                             }
                             Spacer()
                             if item.isClosable {
-                                Button("Free port \(item.port) 💥") { Task { await model.closePortNow(item) } }
+                                Button("Review port \(item.port)") { Task { await model.requestPortReview(item) } }
                                     .disabled(model.isActing)
                             } else {
                                 Label(item.protected ? "Active work — protected" : "Managed by macOS", systemImage: "lock.shield")

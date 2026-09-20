@@ -3,6 +3,17 @@ import Combine
 import MachogsCore
 import SwiftUI
 
+enum MachogsBuild {
+    static var displayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Machogs"
+    }
+
+    static var urlScheme: String {
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
+        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "machogs"
+    }
+}
+
 @main
 struct MachogsApp: App {
     @StateObject private var model: AppModel
@@ -15,6 +26,19 @@ struct MachogsApp: App {
         let service: any MachogsServing = MachogsClient()
         let model = AppModel(service: service)
         let settings = AppSettings()
+        // A design launch opens the real overview without onboarding prompts.
+        // These are in-memory choices in the isolated design app only.
+        if Bundle.main.bundleIdentifier == "com.bnishit.machogs.design",
+           ProcessInfo.processInfo.arguments.contains("--design-preview") {
+            settings.onboardingComplete = true
+            settings.shoulderTaps = false
+            settings.soundOn = false
+            if ProcessInfo.processInfo.arguments.contains("--design-light") {
+                NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            } else if ProcessInfo.processInfo.arguments.contains("--design-dark") {
+                NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            }
+        }
         _model = StateObject(wrappedValue: model)
         _settings = StateObject(wrappedValue: settings)
         successSound = SuccessSoundCoordinator(model: model, settings: settings)
@@ -22,7 +46,7 @@ struct MachogsApp: App {
     }
 
     var body: some Scene {
-        Window("Machogs", id: "main") {
+        Window(MachogsBuild.displayName, id: "main") {
             Group {
                 if settings.onboardingComplete {
                     MainWindow(model: model, settings: settings, router: router)
@@ -65,7 +89,7 @@ struct MachogsApp: App {
     }
 
     private func handleURL(_ url: URL) {
-        guard url.scheme == "machogs" else { return }
+        guard url.scheme == MachogsBuild.urlScheme else { return }
         let targets = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
             .filter { $0.name == "target" }
             .compactMap { item -> ProcessTarget? in
@@ -74,12 +98,7 @@ struct MachogsApp: App {
                 guard parts.count == 2, let pid = Int(parts[0]) else { return nil }
                 return ProcessTarget(pid: pid, identity: parts[1])
             } ?? []
-        if url.host == "close" {
-            // "Close it 💥" straight from the notification. The engine
-            // re-verifies every target before anything closes.
-            if !targets.isEmpty { Task { await model.closeTargetsNow(targets) } }
-            return
-        }
+        // External links may request a review, never authorize a close.
         router.page = AppPage(rawValue: url.host ?? "") ?? .now
         NSApp.activate(ignoringOtherApps: true)
         if !targets.isEmpty { Task { await model.requestProcessTargets(targets) } }

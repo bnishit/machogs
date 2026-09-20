@@ -9,7 +9,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        let close = UNNotificationAction(identifier: "CLOSE", title: "Close it 💥", options: [])
+        let close = UNNotificationAction(identifier: "CLOSE", title: "Review", options: [.foreground])
         let review = UNNotificationAction(identifier: "REVIEW", title: "Show me", options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "MACHOGS_REVIEW", actions: [close, review], intentIdentifiers: [])
@@ -56,7 +56,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
                                 didReceive response: UNNotificationResponse) async {
         let values = response.notification.request.content.userInfo["targets"] as? [String] ?? []
         var components = URLComponents()
-        components.scheme = "machogs"
+        components.scheme = MachogsBuild.urlScheme
         components.host = response.actionIdentifier == "CLOSE" ? "close" : "now"
         components.queryItems = values.map { URLQueryItem(name: "target", value: $0) }
         if let url = components.url { NSWorkspace.shared.open(url) }
