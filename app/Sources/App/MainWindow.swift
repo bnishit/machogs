@@ -58,7 +58,7 @@ struct MainWindow: View {
                 VStack(spacing: 5) {
                     Image(systemName: "lock.shield").font(.title3).foregroundStyle(.secondary)
                     Text(Bundle.main.bundleIdentifier == "com.bnishit.machogs.design" ? "Design preview · Local build" : "Your work stays yours.")
-                        .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .joyReveal(appeared, delay: 0.15)

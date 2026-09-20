@@ -33,6 +33,11 @@ struct MachogsApp: App {
             settings.onboardingComplete = true
             settings.shoulderTaps = false
             settings.soundOn = false
+            if ProcessInfo.processInfo.arguments.contains("--design-light") {
+                NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            } else if ProcessInfo.processInfo.arguments.contains("--design-dark") {
+                NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            }
         }
         _model = StateObject(wrappedValue: model)
         _settings = StateObject(wrappedValue: settings)

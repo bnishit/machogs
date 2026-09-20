@@ -3,8 +3,8 @@
 set -euo pipefail
 MODE="${1:-run}"
 case "$MODE" in
-    run|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify) ;;
-    *) echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
+    run|--light|--dark|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify) ;;
+    *) echo "usage: $0 [run|--light|--dark|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
 esac
 APP_NAME="Machogs Design"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,7 +17,10 @@ MACHOGS_CHANNEL=design "$ROOT_DIR/app/build.sh"
 if [[ "$MODE" == --debug || "$MODE" == debug ]]; then
     exec lldb -- "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 fi
-/usr/bin/open -n "$APP_BUNDLE" --args --design-preview
+PREVIEW_ARGS=(--design-preview)
+[[ "$MODE" == --light ]] && PREVIEW_ARGS+=(--design-light)
+[[ "$MODE" == --dark ]] && PREVIEW_ARGS+=(--design-dark)
+/usr/bin/open -n "$APP_BUNDLE" --args "${PREVIEW_ARGS[@]}"
 /usr/bin/open "machogs-design://now"
 case "$MODE" in
     --logs|logs|--telemetry|telemetry)
