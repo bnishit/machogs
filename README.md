@@ -223,21 +223,48 @@ Claude Code, Codex, Cursor:
 > tell me what is hogging my Mac. Show me the findings and ask before closing
 > a process, freeing a port, or clearing a cache.
 
-## Use
+## Use the CLI
+
+Start with a scan, then choose what to close:
 
 ```sh
-machogs              # plain answer. Closes nothing.
-machogs fix          # go through them one at a time, asking before each
-machogs blame        # scoreboard: which app leaves the most junk behind
-machogs brag         # a shareable card of what your Mac has been wasting
-machogs disk         # read-only storage report
-machogs disk clear <path> # clear one engine-approved safe cache, after consent
-machogs ports        # every port in use and who is squatting it
-machogs port 3000    # read-only port report; add `kill` only after consent
-machogs --details    # the technical report, by category
-machogs --json       # machine-readable, for agents
-machogs --check      # audit the safety rules, close nothing
+machogs              # scan only; nothing closes
+machogs fix          # review each finding group in your terminal
 ```
+
+The review names the app and explains what it left behind. Save your work first.
+For each group, press **y** to close it, **Enter** to leave it alone, or **q** to
+stop. A typo asks again. The CLI rechecks the reviewed processes before closing
+and counts only successful closes in the receipt.
+
+```text
+Scan → read the finding → y / Enter / q → see what actually closed
+```
+
+For other questions, start with a read-only command:
+
+| Question | Command |
+|---|---|
+| Where did my storage go? | `machogs disk` |
+| Who holds port 3000? | `machogs port 3000` |
+| What else is listening? | `machogs ports` |
+| Which apps leave the most behind? | `machogs blame` |
+| Can I share my cleanup receipt? | `machogs brag` |
+| Can I see technical findings? | `machogs --details` |
+| Are my coding sessions protected? | `machogs --check` |
+| What commands are available? | `machogs --help` |
+
+**Actions are separate.** After reviewing the owner and protections,
+`machogs port 3000 kill` closes an eligible listener without another prompt.
+After reviewing the storage report, `machogs disk clear "/exact/path"` clears
+one reported safe cache or the Trash. Use the exact path; “check first” and
+“your call” locations cannot be cleared by this command.
+
+`machogs fix` needs a terminal. For agents, begin with
+`machogs --json --sessions` and follow [AGENTS.md](AGENTS.md): show the finding,
+get approval, then act. `machogs kill` is an unattended action with no prompts;
+it is not a substitute for reviewing findings. Report exit code **10** means
+there is something to review, not that the scan crashed.
 
 ## Closing something should feel like a win
 
@@ -297,7 +324,7 @@ And `machogs brag` prints the same thing as something you can paste:
   Idle, but holding memory. Oldest has sat there 31 minutes.
   A duplicate. One app started the same helper many times over.
 
-  Close all 11? [y/N]
+  Close 11 programs? [y/N/q]
 ```
 
 ## Safety before cleanup
