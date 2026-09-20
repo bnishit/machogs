@@ -95,21 +95,31 @@ download. Publishing is deliberately outside these scripts.
 
 ## Privacy disclosure
 
-Machogs does not send analytics, telemetry, crash reports, process names, file
-paths, or any other user data off the Mac. It has no network client and no
-third-party SDK. It reads the current user's running processes, ports, memory,
-selected disk-usage locations, and its own local receipt log to explain the
-Mac's state. It stores settings and watchdog cooldowns in macOS preferences and
-writes close receipts to `~/Library/Logs/machogs.log`.
+Machogs 1.4 adds optional usage analytics through PostHog. The default is off.
+The app sends only a random installation identifier, version, installation kind
+(new or existing), environment, event UUID/time, first opted-in use, and one event
+per UTC ISO week with foreground use. It never sends process names, file paths,
+scan results, messages, or cleanup receipts. No autocapture, replay, crash SDK,
+or advertising identifiers are used. Scans and background polling do not count
+as active use. Turning sharing off cancels pending requests and clears the local
+analytics identifier and delivery state; already received events are not erased.
 
-The app can close a user-approved process, free a user-approved port, clear only
-an engine-approved rebuildable cache, or request a restart. It never performs
-those actions merely because it scanned. Notifications and Start at Login are
-optional macOS features the user can turn off.
+Before enabling a destination, turn on PostHog's **Discard client IP data** setting
+and verify ingested test events. Both clients disable GeoIP enrichment and person
+profiles. A network provider still sees the source IP while handling a request.
+The website has a separate optional choice; app and website IDs are not joined.
+See `docs/privacy.html` for the user-facing disclosure and `docs/analytics.md`
+for the measurement contract and verification steps.
 
-`PrivacyInfo.xcprivacy` records no tracking and no collected data. It declares
-the approved `CA92.1` reason for the app's own UserDefaults reads and writes.
-Review the manifest again if Apple changes the contract or a dependency is added.
+The app still reads processes, ports, memory, selected disk-usage locations,
+and its local receipt log only to explain the Mac's state. It stores settings in
+macOS preferences and receipts in `~/Library/Logs/machogs.log`. Closing processes,
+freeing ports, and clearing allowed caches require explicit user actions.
+
+`PrivacyInfo.xcprivacy` declares installation identifiers and product interaction
+for analytics, linked by the installation identifier, with no cross-app tracking.
+UserDefaults retains the `CA92.1` reason. The release verifier checks this contract
+and requires a public capture token and an approved HTTPS ingestion host.
 
 ## GitHub automation boundary
 
@@ -128,8 +138,8 @@ merging responsibilities, not by choosing one whole file over the other:
 
 - Keep the product UX first-launch and Settings screens, including their final
   user-facing privacy and release-status copy.
-- Keep one privacy manifest. Its contract is no tracking, no collected data,
-  no tracking domains, and UserDefaults reason `CA92.1`.
+- Keep one privacy manifest. Its contract is optional usage analytics, no
+  cross-app tracking, no tracking domains, and UserDefaults reason `CA92.1`.
 - Keep this branch's build structure: full-Xcode preflight, per-architecture
   builds, `lipo` universal assembly, version and build-number injection,
   privacy-manifest copy, hardened runtime, secure timestamp for Developer ID,

@@ -67,6 +67,9 @@ struct MainWindow: View {
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
         } detail: {
             VStack(spacing: 0) {
+                if settings.needsAnalyticsChoice {
+                    analyticsChoice.padding(.horizontal, 18).padding(.top, 14)
+                }
                 if let receipt = model.receipt {
                     if receipt.isSuccess {
                         SuccessReceipt(
@@ -105,6 +108,21 @@ struct MainWindow: View {
         .onChange(of: model.receipt) { receipt in
             if receipt?.isSuccess == true { celebrationTrigger += 1 }
         }
+    }
+
+    private var analyticsChoice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Help improve MacHogs? It’s optional.").font(.callout.weight(.semibold))
+            Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Link("Privacy details", destination: AppSettings.privacyURL).font(.caption)
+                Spacer()
+                Button("No thanks") { settings.setAnalyticsEnabled(false) }
+                Button("Enable basic usage") { settings.setAnalyticsEnabled(true) }
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder
@@ -580,6 +598,18 @@ struct SettingsPage: View {
                         .disabled(!soundOn)
                 }
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
+            }
+            Section("Privacy") {
+                Toggle("Share basic usage", isOn: Binding(
+                    get: { settings.shareBasicUsage }, set: settings.setAnalyticsEnabled
+                ))
+                .disabled(!settings.analyticsAvailable)
+                Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
+                Text(settings.analyticsAvailable
+                     ? "Off by default. You can turn this off at any time."
+                     : "Usage sharing is unavailable in this build.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Link("Privacy details", destination: AppSettings.privacyURL)
             }
             Section("Safety") {
                 PromiseRow("Checks are read-only.")

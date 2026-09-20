@@ -60,7 +60,13 @@ struct MachogsApp: App {
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
                 if settings.onboardingComplete { model.startPolling() }
-                Task { await settings.refreshNotificationStatus() }
+                Task {
+                    await settings.refreshNotificationStatus()
+                    await settings.recordForegroundUse()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                Task { await settings.recordForegroundUse() }
             }
             .onDisappear { NSApp.setActivationPolicy(.accessory) }
             .onChange(of: settings.onboardingComplete) { complete in
@@ -76,6 +82,7 @@ struct MachogsApp: App {
         .handlesExternalEvents(matching: ["bust"])
         MenuBarExtra {
             MenuBarView(model: model, settings: settings, router: router)
+                .onAppear { Task { await settings.recordForegroundUse() } }
         } label: {
             MenuBarIcon(model: model)
                 // The label lives as long as the app: the one safe place to
