@@ -19,7 +19,19 @@ if [[ "$TARGET" == *.app ]]; then
     PRIVACY="$TARGET/Contents/Resources/PrivacyInfo.xcprivacy"
     plutil -lint "$PRIVACY"
     test "$(plutil -extract NSPrivacyTracking raw -o - "$PRIVACY")" = "false"
-    test "$(plutil -extract NSPrivacyCollectedDataTypes json -o - "$PRIVACY")" = "[]"
+    python3 - "$PRIVACY" "$INFO" <<'PYTHON'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as f: privacy = plistlib.load(f)
+with open(sys.argv[2], 'rb') as f: info = plistlib.load(f)
+types = privacy['NSPrivacyCollectedDataTypes']
+assert {x['NSPrivacyCollectedDataType'] for x in types} == {
+    'NSPrivacyCollectedDataTypeDeviceID', 'NSPrivacyCollectedDataTypeProductInteraction'}
+assert all(x['NSPrivacyCollectedDataTypePurposes'] == ['NSPrivacyCollectedDataTypePurposeAnalytics']
+           and x['NSPrivacyCollectedDataTypeLinked'] is True
+           and x['NSPrivacyCollectedDataTypeTracking'] is False for x in types)
+assert info.get('MachogsAnalyticsToken', '').startswith('phc_'), 'Release needs a configured public capture token'
+assert info.get('MachogsAnalyticsHost') in ('https://us.i.posthog.com', 'https://eu.i.posthog.com')
+PYTHON
     test "$(plutil -extract NSPrivacyTrackingDomains json -o - "$PRIVACY")" = "[]"
     test "$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPIType raw -o - "$PRIVACY")" = "NSPrivacyAccessedAPICategoryUserDefaults"
     test "$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPITypeReasons.0 raw -o - "$PRIVACY")" = "CA92.1"
