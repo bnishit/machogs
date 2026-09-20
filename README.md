@@ -4,13 +4,20 @@
 
 **[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.0/Machogs-1.4.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
-> [!IMPORTANT]
-> The native Mac app is available as a signed and notarized universal download.
-> It includes a normal window, menu-bar Hogs, Storage and Ports views, Receipts,
-> and Settings. Every action has a named review, stable identity check, and a
-> fresh protection check; menu-bar and notification actions only open Review.
-> It needs macOS 13 or later and no admin password, Full Disk Access, or
-> Accessibility access. The open-source CLI remains available below.
+## The Mac app
+
+Machogs 1.4.0 is a free, signed and Apple-notarized Mac app. Start with
+**Overview** for a plain-English finding, a count of protected work left alone,
+and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
+when you need them. Actions open a review before anything closes or clears.
+
+**New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
+every feature, or change your choice later in **Settings → Privacy**.
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.0) ·
+[Privacy details](https://bnishit.github.io/machogs/privacy.html)
+
+The app needs macOS 13 or later. No admin password, Full Disk Access, or
+Accessibility access is required. Prefer Terminal? [Install the CLI](#install-the-cli).
 
 ```
 $ machogs
@@ -167,6 +174,32 @@ Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
 Start at Login, quit Machogs, then move it from Applications to Trash. Local
 receipts and preferences remain unless you remove them separately.
 
+## Privacy and optional analytics
+
+Checks run on your Mac. Scan results, process names, file paths, messages, and
+cleanup receipts are never included in analytics. The CLI sends no analytics.
+
+The app and website have separate, optional choices. Both start off:
+
+| If you opt in… | What is measured |
+|---|---|
+| Mac app | First observed use after opting in, and one event per UTC week when you open the app or its menu |
+| Website | Landing-page visits and clicks on Mac download buttons |
+
+App events include the version, a random installation ID, and whether this was
+a new setup or an existing installation. Website IDs last for one page load and
+are not linked to app IDs. Events go to PostHog; there is no session recording
+or automatic capture of your activity. Background scans do not count as app use.
+
+Turn app sharing off in **Settings → Privacy**. This cancels pending sends and
+clears the local analytics ID; it does not erase events already received.
+Change the website choice on the [privacy page](https://bnishit.github.io/machogs/privacy.html).
+
+These are opted-in usage counts, not an exact install count. Download clicks do
+not prove installation, existing users are counted separately from new setups,
+and resetting preferences or opting in again can create another ID.
+[Measurement details for contributors](docs/analytics.md).
+
 ## Install the CLI
 
 ```sh
@@ -267,16 +300,16 @@ And `machogs brag` prints the same thing as something you can paste:
   Close all 11? [y/N]
 ```
 
-## This will not eat your homework
+## Safety before cleanup
 
 It closes programs. That deserves your suspicion, so here is what stops it
 hurting you:
 
 - **It never closes anything on its own.** Running `machogs` only looks. `fix`
   asks you about every single item.
-- **It will never close a coding session.** Codex and Claude Code sessions, and their
-  helpers, are listed and skipped. You do not lose
-  unsaved work.
+- **Live coding sessions are protected.** Running Codex and Claude Code sessions
+  and their helpers are listed and skipped. Closing other programs can lose
+  unsaved work, so review the finding before choosing to close one.
 - **It only touches your own programs.** macOS system processes are out of
   scope entirely.
 - **Programs that are meant to work hard are left alone** — video encoders,
