@@ -126,7 +126,10 @@ The report forms below are read-only. Their action forms are not.
 
 - `machogs blame` — a scoreboard of which app leaves the most behind on this
   machine, built from the log over time. Useful when the user asks "why does
-  this keep happening?"
+  this keep happening?" Use `machogs blame --json` to read it, and
+  `--since=7d` (any whole number of days) to answer "is it still happening?".
+  JSON shape: `{"mode":"blame","since","first_seen","apps":[{"app","closed",
+  "cpu_seconds","worst_cpu_seconds"}],"total":{"closed","cpu_seconds"}}`.
 - `machogs brag` — the same totals as a card the user can paste somewhere.
   Offer it only if they seem pleased; never push it.
 - `machogs disk` (or `machogs disk --json`) — the read-only storage X-ray for

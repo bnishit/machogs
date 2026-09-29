@@ -249,6 +249,7 @@ For other questions, start with a read-only command:
 | Who holds port 3000? | `machogs port 3000` |
 | What else is listening? | `machogs ports` |
 | Which apps leave the most behind? | `machogs blame` |
+| What leaked this week? | `machogs blame --since=7d` |
 | Can I share my cleanup receipt? | `machogs brag` |
 | Can I see technical findings? | `machogs --details` |
 | Are my coding sessions protected? | `machogs --check` |
@@ -298,6 +299,9 @@ since 2026-08-17
   ChatGPT                          39   2 hours 👑
   a Claude Code plugin              1   91 hours
 ```
+
+Add `--since=7d` (any number of days) to count only recent closes, or
+`--json` to get the scoreboard as one object for scripts and agents.
 
 And `machogs brag` prints the same thing as something you can paste:
 
