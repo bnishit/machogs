@@ -14,6 +14,10 @@
 #   machogs port 3000       inspect one port
 #   machogs blame           see which apps left the most behind
 #   machogs brag            print a shareable cleanup receipt
+#   machogs blame --since=7d   only count closes from the last 7 days
+#   machogs blame --json    the scoreboard as one JSON object
+#   machogs history         the last 20 things machogs closed, newest first
+#   machogs history --app=ChatGPT --since=7d   narrow to one app or window
 #   machogs --details       technical findings by category
 #   machogs --check         audit process protections
 #   machogs --sessions      include Claude Code session details
@@ -71,7 +75,7 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
-MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""
+MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""; SINCE_DAYS=""; APP_FILTER=""
 for a in "$@"; do
   case "$a" in
     kill)        MODE=kill ;;
@@ -80,6 +84,7 @@ for a in "$@"; do
     fix)         MODE=fix ;;
     blame)       MODE=blame ;;
     brag)        MODE=brag ;;
+    history)     MODE=history ;;
     disk)        MODE=disk ;;
     clear)       if [ "$MODE" = disk ] || [ "$MODE" = clear-pending ]; then MODE=clear-pending; else
                    echo "clear goes with disk: machogs disk clear <path>" >&2; exit 2; fi ;;
@@ -95,6 +100,14 @@ for a in "$@"; do
       esac
       TARGETS="$TARGETS $target"
       ;;
+    --since=*)
+      SINCE_DAYS=${a#--since=}; SINCE_DAYS=${SINCE_DAYS%d}
+      case "$SINCE_DAYS" in ''|*[!0-9]*|0) echo "bad --since: ${a#--since=} (try --since=7d)" >&2; exit 2 ;; esac
+      ;;
+    --app=*)
+      APP_FILTER=${a#--app=}
+      case "$APP_FILTER" in ''|*$'\t'*) echo "bad --app: give an app name, e.g. --app=ChatGPT" >&2; exit 2 ;; esac
+      ;;
     --sessions)  SHOW_SESSIONS=1 ;;
     --check)     MODE=check ;;
     --json)      JSON=1 ;;
@@ -108,6 +121,11 @@ if [ -n "$TARGETS" ] && [ "$MODE" != kill ] && [ "$MODE" != plan ]; then
   echo "--target goes with plan or kill" >&2
   exit 2
 fi
+case "$MODE" in blame|brag|history) ;; *)
+  [ -z "$SINCE_DAYS" ] || { echo "--since goes with blame, brag or history" >&2; exit 2; }
+  [ -z "$APP_FILTER" ] || { echo "--app goes with blame or history" >&2; exit 2; } ;;
+esac
+[ "$MODE" = brag ] && [ -n "$APP_FILTER" ] && { echo "--app goes with blame or history" >&2; exit 2; }
 if [ "$MODE" = plan ] && { [ -z "$TARGETS" ] || [ "$JSON" -ne 1 ]; }; then
   echo "plan needs --json and at least one --target=PID:IDENTITY" >&2
   exit 2
@@ -455,45 +473,105 @@ protected() {
 # The data is a fact only this tool can produce: which app leaks most on YOUR
 # machine, measured, over months.
 
+# The day N days ago as YYYY-MM-DD, BSD date first (macOS), GNU as fallback.
+days_ago() { date -v-"$1"d +%F 2>/dev/null || date -d "$1 days ago" +%F 2>/dev/null; }
+
+# Log lines start "YYYY-MM-DD HH:MM:SS", so a plain string compare on the first
+# ten characters is a date compare. An empty cutoff keeps everything.
+log_since() {
+  awk -v c="${1:-}" 'c == "" || substr($0, 1, 10) >= c' "$LOG" 2>/dev/null
+}
+
+# Output: closed, cpu-seconds, worst single process, closes since RECENT, app.
 blame_table() {
-  awk -F'\t' '
-    $2=="closed" { app=$4; n[app]++; secs[app]+=$7; if ($7+0 > worst[app]+0) worst[app]=$7+0; next }
+  log_since "${CUTOFF:-}" | awk -F'\t' -v r="${RECENT:-}" -v want="${APP_FILTER:-}" '
+    function keep(a) { return want == "" || tolower(a) == tolower(want) }
+    $2=="closed" { app=$4; if (!keep(app)) next
+                   n[app]++; secs[app]+=$7; if ($7+0 > worst[app]+0) worst[app]=$7+0
+                   if (r != "" && substr($0, 1, 10) >= r) recent[app]++
+                   next }
     # older free-text lines, two shapes:
     #   "... closed 123 — browser-control helper (ChatGPT)"
     #   "... killed 123 — duplicate server.cjs under ChatGPT"
-    { if (match($0, /\(([^)]+)\)$/))      { app=substr($0, RSTART+1, RLENGTH-2); n[app]++ }
-      else if (match($0, / under .+$/))   { app=substr($0, RSTART+7); n[app]++ }
-      else n["unknown"]++ }
-    END { for (a in n) printf "%d\t%d\t%d\t%s\n", n[a], secs[a], worst[a], a }
-  ' "$LOG" 2>/dev/null | sort -rn
+    { if (match($0, /\(([^)]+)\)$/))      app=substr($0, RSTART+1, RLENGTH-2)
+      else if (match($0, / under .+$/))   app=substr($0, RSTART+7)
+      else app="unknown"
+      if (!keep(app)) next
+      n[app]++
+      if (r != "" && substr($0, 1, 10) >= r) recent[app]++ }
+    END { for (a in n) printf "%d\t%d\t%d\t%d\t%s\n", n[a], secs[a], worst[a], recent[a], a }
+  ' | sort -t "$TAB" -k1,1nr -k2,2nr
 }
 
 if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
   if [ ! -s "$LOG" ]; then
+    if [ "$MODE" = blame ] && [ "$JSON" -eq 1 ]; then
+      echo '{"mode":"blame","since":null,"app_filter":null,"first_seen":null,"apps":[],"total":{"closed":0,"cpu_seconds":0}}'
+      exit 0
+    fi
     echo "Nothing closed yet — no scoreboard to show."
     echo "${DIM}Run ${BLD}machogs fix${NC}${DIM} first.${NC}"
     exit 0
   fi
-  total_n=0; total_s=0; worst_s=0; worst_app=""; first_seen=""
-  first_seen=$(head -1 "$LOG" | cut -c1-10)
+  total_n=0; total_s=0; worst_s=0; worst_app=""; first_seen=""; CUTOFF=""
+  if [ -n "$SINCE_DAYS" ]; then
+    CUTOFF=$(days_ago "$SINCE_DAYS")
+    [ -n "$CUTOFF" ] || { echo "could not work out the date $SINCE_DAYS days ago" >&2; exit 2; }
+  fi
+  first_seen=$(log_since "$CUTOFF" | head -1 | cut -c1-10)
+  # Without --since, a second count says whether each app is still at it.
+  RECENT=""; [ -z "$CUTOFF" ] && RECENT=$(days_ago 7)
   BL=$(blame_table)
+
+  if [ "$MODE" = blame ] && [ "$JSON" -eq 1 ]; then
+    # One object on stdout, like every other --json. Apps sorted worst-first.
+    printf '{"mode":"blame","since":%s,"app_filter":%s,"first_seen":%s,"apps":[' \
+      "$([ -n "$CUTOFF" ] && printf '"%s"' "$CUTOFF" || printf null)" \
+      "$([ -n "$APP_FILTER" ] && printf '"%s"' "$(jesc "$APP_FILTER")" || printf null)" \
+      "$([ -n "$first_seen" ] && printf '"%s"' "$first_seen" || printf null)"
+    sep=""
+    while IFS=$'\t' read -r n secs worst recent app; do
+      [ -n "$app" ] || continue
+      total_n=$((total_n + n)); total_s=$((total_s + secs))
+      printf '%s{"app":"%s","closed":%d,"cpu_seconds":%d,"worst_cpu_seconds":%d,"closed_last_7d":%s}' \
+        "$sep" "$(jesc "$app")" "$n" "$secs" "$worst" "$([ -n "$RECENT" ] && echo "$recent" || echo null)"
+      sep=","
+    done < <(printf '%s\n' "$BL")
+    printf '],"total":{"closed":%d,"cpu_seconds":%d}}\n' "$total_n" "$total_s"
+    exit 0
+  fi
+
+  if [ -z "$first_seen" ] || [ -z "$BL" ]; then
+    echo "Nothing closed$([ -n "$APP_FILTER" ] && echo " from $APP_FILTER")$([ -n "$SINCE_DAYS" ] && echo " in the last $SINCE_DAYS days")."
+    echo "${DIM}Widen the filter to see more.${NC}"
+    exit 0
+  fi
 
   if [ "$MODE" = blame ]; then
     echo
     echo "${BLD}Who leaves the most junk on your Mac${NC}"
-    echo "${DIM}since ${first_seen}${NC}"
+    if [ -n "$SINCE_DAYS" ]; then echo "${DIM}last $SINCE_DAYS days (since ${first_seen})${NC}"
+    else echo "${DIM}since ${first_seen}${NC}"; fi
     echo
-    printf "  %-26s %8s   %s\n" "APP" "CLOSED" "CPU TIME WASTED"
+    if [ -n "$RECENT" ]; then
+      printf "  %-26s %8s %9s   %s\n" "APP" "CLOSED" "LAST 7D" "CPU TIME WASTED"
+    else
+      printf "  %-26s %8s   %s\n" "APP" "CLOSED" "CPU TIME WASTED"
+    fi
     crown="$E_CROWN"   # the table is sorted worst-first, so row one wears it
-    while IFS=$'\t' read -r n secs worst app; do
+    while IFS=$'\t' read -r n secs worst recent app; do
       [ -n "$app" ] || continue
-      printf "  %-26s %8s   %s%s\n" "$app" "$n" "$(burned "$secs")" "$crown"
+      if [ -n "$RECENT" ]; then
+        printf "  %-26s %8s %9s   %s%s\n" "$app" "$n" "$recent" "$(burned "$secs")" "$crown"
+      else
+        printf "  %-26s %8s   %s%s\n" "$app" "$n" "$(burned "$secs")" "$crown"
+      fi
       crown=""
     done < <(printf '%s\n' "$BL")
     echo
   fi
 
-  while IFS=$'\t' read -r n secs worst app; do
+  while IFS=$'\t' read -r n secs worst recent app; do
     [ -n "$app" ] || continue
     total_n=$((total_n + n)); total_s=$((total_s + secs))
     if [ "${worst:-0}" -gt "$worst_s" ]; then worst_s=$worst; worst_app=$app; fi
@@ -501,7 +579,7 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
 
   if [ "$MODE" = brag ]; then
     top=$(printf '%s\n' "$BL" | head -1)
-    top_app=$(printf '%s' "$top" | cut -f4); top_n=$(printf '%s' "$top" | cut -f1)
+    top_app=$(printf '%s' "$top" | cut -f5); top_n=$(printf '%s' "$top" | cut -f1)
     charges=$(phone_charges "$total_s")
     echo
     echo "  ---------------------------------------------"
@@ -527,6 +605,59 @@ if [ "$MODE" = blame ] || [ "$MODE" = brag ]; then
     echo "${DIM}Copy the block above. That is the post.${NC}"
     echo
   fi
+  exit 0
+fi
+
+# ---- history: what was closed, one line each ----------------------------
+# The receipts behind the scoreboard. Read-only, newest first. Only the
+# tab-separated lines carry fields to show; older free-text lines are counted
+# by blame but skipped here.
+if [ "$MODE" = history ]; then
+  CUTOFF=""
+  if [ -n "$SINCE_DAYS" ]; then
+    CUTOFF=$(days_ago "$SINCE_DAYS")
+    [ -n "$CUTOFF" ] || { echo "could not work out the date $SINCE_DAYS days ago" >&2; exit 2; }
+  fi
+  # Without --since, show the last 20; a window shows everything inside it.
+  limit=20; [ -n "$SINCE_DAYS" ] && limit=0
+  HIST=$(log_since "$CUTOFF" | awk -F'\t' -v want="$APP_FILTER" '
+    $2=="closed" && NF >= 7 && (want == "" || tolower($4) == tolower(want))
+  ' | awk -v n="$limit" '{ l[NR]=$0 } END { for (i=NR; i>=1 && (n==0 || i>NR-n); i--) print l[i] }')
+
+  if [ "$JSON" -eq 1 ]; then
+    printf '{"mode":"history","since":%s,"app_filter":%s,"closes":[' \
+      "$([ -n "$CUTOFF" ] && printf '"%s"' "$CUTOFF" || printf null)" \
+      "$([ -n "$APP_FILTER" ] && printf '"%s"' "$(jesc "$APP_FILTER")" || printf null)"
+    sep=""
+    while IFS=$'\t' read -r when _ pid app what cpu csec; do
+      [ -n "$when" ] || continue
+      case "$pid" in ''|*[!0-9]*) pid=0 ;; esac
+      case "$csec" in ''|*[!0-9]*) csec=0 ;; esac
+      case "$cpu" in ''|*[!0-9.]*|*.*.*|.*|*.) cpu=0 ;; esac
+      printf '%s{"time":"%s","pid":%s,"app":"%s","what":"%s","cpu":%s,"cpu_seconds":%s}' \
+        "$sep" "$(jesc "$when")" "$pid" "$(jesc "$app")" "$(jesc "$what")" "$cpu" "$csec"
+      sep=","
+    done < <(printf '%s\n' "$HIST")
+    printf ']}\n'
+    exit 0
+  fi
+
+  if [ -z "$HIST" ]; then
+    echo "Nothing closed$([ -n "$APP_FILTER" ] && echo " from $APP_FILTER")$([ -n "$SINCE_DAYS" ] && echo " in the last $SINCE_DAYS days")."
+    echo "${DIM}machogs logs every close it makes; run ${BLD}machogs fix${NC}${DIM} to start one.${NC}"
+    exit 0
+  fi
+  echo
+  if [ -n "$SINCE_DAYS" ]; then echo "${BLD}What machogs closed in the last $SINCE_DAYS days${NC}"
+  else echo "${BLD}The last things machogs closed${NC}"; fi
+  echo
+  printf "  %-16s %-20s %-30s %s\n" "WHEN" "APP" "WHAT" "CPU TIME"
+  while IFS=$'\t' read -r when _ pid app what cpu csec; do
+    [ -n "$when" ] || continue
+    printf "  %-16s %-20s %-30s %s\n" "${when:0:16}" "${app:0:20}" "${what:0:30}" "$(burned "${csec:-0}")"
+  done < <(printf '%s\n' "$HIST")
+  echo
+  [ -z "$SINCE_DAYS" ] && echo "${DIM}Newest first. Add --since=30d for a whole month.${NC}" && echo
   exit 0
 fi
 
