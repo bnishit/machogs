@@ -129,7 +129,13 @@ The report forms below are read-only. Their action forms are not.
   this keep happening?" Use `machogs blame --json` to read it, and
   `--since=7d` (any whole number of days) to answer "is it still happening?".
   JSON shape: `{"mode":"blame","since","first_seen","apps":[{"app","closed",
-  "cpu_seconds","worst_cpu_seconds"}],"total":{"closed","cpu_seconds"}}`.
+  "cpu_seconds","worst_cpu_seconds","closed_last_7d"}],"total":{"closed","cpu_seconds"}}`.
+  `closed_last_7d` is null when `--since` is set. `--app=NAME` (any case)
+  narrows it to one app.
+- `machogs history --json` — the individual closes behind the scoreboard,
+  newest first: `{"closes":[{"time","pid","app","what","cpu","cpu_seconds"}]}`.
+  Last 20 by default; with `--since=Nd` everything in the window. Takes
+  `--app=NAME`. Use it when the user asks "what did you close?"
 - `machogs brag` — the same totals as a card the user can paste somewhere.
   Offer it only if they seem pleased; never push it.
 - `machogs disk` (or `machogs disk --json`) — the read-only storage X-ray for

@@ -74,8 +74,48 @@ class BlameTests(unittest.TestCase):
         self.assertEqual(data['apps'], [])
         self.assertEqual(data['total']['closed'], 0)
 
+    def test_recent_column_counts_last_week(self):
+        self.write_log()
+        apps = {a['app']: a for a in json.loads(self.run_engine('blame', '--json').stdout)['apps']}
+        self.assertEqual(apps['ChatGPT']['closed_last_7d'], 2)
+        self.assertEqual(apps['Old"App']['closed_last_7d'], 0)
+        self.assertIn('LAST 7D', self.run_engine('blame').stdout)
+        windowed = json.loads(self.run_engine('blame', '--json', '--since=7d').stdout)
+        self.assertIsNone(windowed['apps'][0]['closed_last_7d'])
+
+    def test_app_filter_is_case_insensitive(self):
+        self.write_log()
+        data = json.loads(self.run_engine('blame', '--json', '--app=chatgpt').stdout)
+        self.assertEqual([a['app'] for a in data['apps']], ['ChatGPT'])
+        self.assertEqual(data['app_filter'], 'chatgpt')
+        self.assertIn('Nothing closed from Nope', self.run_engine('blame', '--app=Nope').stdout)
+
+    def test_history_newest_first_and_filtered(self):
+        self.write_log()
+        closes = json.loads(self.run_engine('history', '--json').stdout)['closes']
+        self.assertEqual([c['pid'] for c in closes], [4, 3, 2, 1])
+        self.assertEqual(closes[2]['cpu'], 90)
+        self.assertEqual(closes[3]['app'], 'Old"App')
+        recent = json.loads(self.run_engine('history', '--json', '--since=7d',
+                                            '--app=CHATGPT').stdout)['closes']
+        self.assertEqual([c['pid'] for c in recent], [4, 3])
+        text = self.run_engine('history').stdout
+        self.assertLess(text.index('ChatGPT'), text.index('Old"App'))
+
+    def test_history_keeps_last_twenty(self):
+        self.log.write_text(''.join(
+            f'2026-01-01 10:00:{i:02d}\tclosed\t{i}\tApp\thelper\t0\t1\n' for i in range(30)))
+        closes = json.loads(self.run_engine('history', '--json').stdout)['closes']
+        self.assertEqual(len(closes), 20)
+        self.assertEqual(closes[0]['pid'], 29)
+
+    def test_history_empty_log(self):
+        self.assertEqual(json.loads(self.run_engine('history', '--json').stdout)['closes'], [])
+        self.assertIn('Nothing closed', self.run_engine('history').stdout)
+
     def test_bad_since_is_usage_error(self):
-        for args in (['blame', '--since=0'], ['blame', '--since=week'], ['--since=7d']):
+        for args in (['blame', '--since=0'], ['blame', '--since=week'], ['--since=7d'],
+                     ['brag', '--app=X'], ['kill', '--app=X'], ['blame', '--app=']):
             with self.subTest(args=args):
                 self.assertEqual(self.run_engine(*args).returncode, 2)
 

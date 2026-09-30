@@ -65,7 +65,8 @@ for unattended work.
 | `machogs kill --json` | acts | No prompt; use only after explicit consent. |
 | `machogs kill --json --dupes` | acts | Also closes agreed duplicate helpers. |
 | `machogs blame` | reads | Local scoreboard built from successful-close log. |
-| `machogs blame --json --since=7d` | reads | Scoreboard as JSON; `--since=Nd` limits blame or brag to the last N days. |
+| `machogs blame --json --since=7d` | reads | Scoreboard as JSON; `--since=Nd` limits blame, brag or history to the last N days; `--app=NAME` narrows blame or history. |
+| `machogs history --json` | reads | Recent closes, newest first (last 20, or all inside `--since`). |
 | `machogs brag` | reads | Copyable cumulative receipt. |
 | `machogs disk --json` | reads | Storage items with `safe`, `check`, or `yours`. |
 | `machogs disk clear <path>` | deletes | Clears one exact allow-listed safe cache or Trash path. Ask first; exit 3 means refused or missing. |

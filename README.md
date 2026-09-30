@@ -250,6 +250,7 @@ For other questions, start with a read-only command:
 | What else is listening? | `machogs ports` |
 | Which apps leave the most behind? | `machogs blame` |
 | What leaked this week? | `machogs blame --since=7d` |
+| What did machogs close recently? | `machogs history` |
 | Can I share my cleanup receipt? | `machogs brag` |
 | Can I see technical findings? | `machogs --details` |
 | Are my coding sessions protected? | `machogs --check` |
@@ -301,7 +302,10 @@ since 2026-08-17
 ```
 
 Add `--since=7d` (any number of days) to count only recent closes, or
-`--json` to get the scoreboard as one object for scripts and agents.
+`--json` to get the scoreboard as one object for scripts and agents. Without
+`--since`, a LAST 7D column shows whether each app is still leaking.
+`--app=ChatGPT` narrows it to one app. `machogs history` lists the closes
+themselves, newest first, and takes the same `--since`, `--app` and `--json`.
 
 And `machogs brag` prints the same thing as something you can paste:
 
