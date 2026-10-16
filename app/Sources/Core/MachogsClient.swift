@@ -2,6 +2,8 @@ import Foundation
 
 public protocol MachogsServing: Sendable {
     func scan() async throws -> EngineReport
+    func scanAbandoned() async throws -> EngineReport
+    func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport
     func inspectMemory() async throws -> MemorySnapshot
     func planClose(targets: [ProcessTarget]) async throws -> EngineReport
     func closeReviewed(targets: [ProcessTarget]) async throws -> EngineReport
@@ -14,6 +16,8 @@ public protocol MachogsServing: Sendable {
 }
 
 public extension MachogsServing {
+    func scanAbandoned() async throws -> EngineReport { throw MachogsClientError.invalidResponse }
+    func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport { throw MachogsClientError.invalidResponse }
     func inspectMemory() async throws -> MemorySnapshot { throw MachogsClientError.invalidResponse }
 }
 
@@ -73,6 +77,15 @@ public struct MachogsClient: MachogsServing {
 
     public func inspectMemory() async throws -> MemorySnapshot {
         try await MemoryMonitor.sample()
+    }
+
+    public func scanAbandoned() async throws -> EngineReport {
+        try await decode(["--json", "--abandoned-only"], as: EngineReport.self)
+    }
+
+    public func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport {
+        guard !Self.targetArguments(targets).isEmpty else { throw MachogsClientError.invalidResponse }
+        return try await decode(["kill", "--json", "--abandoned-only"] + Self.targetArguments(targets), as: EngineReport.self)
     }
 
     public func scan() async throws -> EngineReport {

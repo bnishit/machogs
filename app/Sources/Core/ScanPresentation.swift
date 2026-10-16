@@ -63,7 +63,7 @@ public struct ScanPresentation: Equatable, Sendable {
     public var detail: String {
         switch state {
         case .initial, .checking:
-            return "This check only looks. Nothing will close."
+            return "Checking apps and helpers. Live coding sessions stay protected."
         case .unavailable:
             return "There is no successful scan to show. Try checking again."
         case .stale:

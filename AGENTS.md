@@ -31,6 +31,13 @@ to an engine allow-list of rebuildable caches and the Trash.
 Note: `machogs fix` needs a real terminal and will refuse to run without one.
 Use `machogs kill` for unattended work.
 
+The native app has a separate opt-in automatic cleanup mode for confirmed
+abandoned automation helpers. This is not permission for an agent to close
+other findings. `--abandoned-only` reports only the strict automatic candidates;
+`kill --abandoned-only --target=PID:IDENTITY` rechecks those exact candidates.
+The app observes them for five continuous minutes first. It never auto-closes
+connected helpers or live sessions and never force-kills automatic candidates.
+
 ## Never do these
 
 - **Never run `kill` before the user has seen the findings and agreed.** A

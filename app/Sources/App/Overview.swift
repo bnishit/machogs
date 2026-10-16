@@ -132,7 +132,7 @@ struct StatusHero: View {
                 .buttonStyle(.borderedProminent).tint(tint)
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(model.isScanning || model.isActing)
-                Text("Nothing closes during a check.")
+                Text("Live coding sessions stay protected.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

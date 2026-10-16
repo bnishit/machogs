@@ -1,15 +1,16 @@
 # machogs 🐷
 
-**Finds the hog. Names the app. Closes nothing without you.**
+**Finds the hog. Names the app. Leaves live sessions alone.**
 
 **[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.1/Machogs-1.4.1.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 ## The Mac app
 
-Machogs 1.4.0 is a free, signed and Apple-notarized Mac app. Start with
+Machogs is a free, signed and Apple-notarized Mac app. Start with
 **Overview** for a plain-English finding, a count of protected work left alone,
 and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
-when you need them. Actions open a review before anything closes or clears.
+when you need them. Manual cleanup stays under your control. Automatic cleanup
+is opt-in and limited to disconnected abandoned helpers.
 
 **New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
 every feature, or change your choice later in **Settings → Privacy**.
@@ -27,6 +28,17 @@ and review unused tabs or restart the owning app; it never kills a live coding
 session. Notifications must be enabled in Machogs and allowed by macOS. A
 warning identifies resource use, not proof of a leak. This monitor is in the
 native app; the CLI's existing process report is unchanged.
+
+The native app also offers **Automatically clean confirmed abandoned helpers** in
+Settings (off by default). With your opt-in, a known automation helper must remain
+orphaned, idle, and disconnected for five continuous minutes. Machogs refuses
+helpers with children, terminals, open pipes/sockets, working file descriptors,
+or launch-agent registrations. It checks ownership, process identity, and live
+coding protections again, sends a normal termination request, and records a
+receipt only after exit. There is no force-kill fallback. A missed check, sleep,
+or failed check restarts the observation window. Connected and uncertain helpers,
+duplicate servers, browsers, and live coding sessions still require review.
+This feature does not cure memory growth inside a running app.
 
 ```
 $ machogs
@@ -54,6 +66,7 @@ What it catches: 🔥 stuck spinners cooking your CPU · 👯 clone armies (one 
 honest diagnosis when only a restart will fix it.
 
 ---
+
 
 ## Why is my Mac fan so loud?
 
@@ -349,7 +362,7 @@ And `machogs brag` prints the same thing as something you can paste:
 It closes programs. That deserves your suspicion, so here is what stops it
 hurting you:
 
-- **It never closes anything on its own.** Running `machogs` only looks. `fix`
+- **The CLI never closes anything on its own.** Running `machogs` only looks. `fix`
   asks you about every single item.
 - **Live coding sessions are protected.** Running Codex and Claude Code sessions
   and their helpers are listed and skipped. Closing other programs can lose
