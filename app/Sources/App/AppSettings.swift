@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import MachogsCore
 import ServiceManagement
 import UserNotifications
 
@@ -9,6 +10,7 @@ final class AppSettings: ObservableObject {
     @Published var onboardingComplete: Bool
     @Published var shoulderTaps: Bool
     @Published var soundOn: Bool
+    @Published var anonymousUsage: Bool
     @Published var startAtLogin: Bool
     @Published var setupError: String?
     @Published var notificationStatus: UNAuthorizationStatus = .notDetermined
@@ -19,6 +21,7 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        anonymousUsage = UsageAnalytics.shared.enabled
         onboardingComplete = defaults.bool(forKey: "onboardingComplete")
         shoulderTaps = defaults.object(forKey: "watchdogOn") as? Bool ?? true
         soundOn = defaults.object(forKey: "soundOn") as? Bool ?? true
@@ -32,6 +35,7 @@ final class AppSettings: ObservableObject {
         let loginConfigured = setStartAtLogin(startAtLogin)
         defaults.set(true, forKey: "onboardingComplete")
         onboardingComplete = true
+        UsageAnalytics.shared.track("onboarding.completed")
         return loginConfigured
     }
 
@@ -57,6 +61,11 @@ final class AppSettings: ObservableObject {
             setupError = "Machogs could not change Start at Login. The app still works whenever you open it."
             return false
         }
+    }
+
+    func setAnonymousUsage(_ enabled: Bool) {
+        anonymousUsage = enabled
+        UsageAnalytics.shared.setEnabled(enabled)
     }
 
     func setSound(_ enabled: Bool) {

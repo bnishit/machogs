@@ -22,6 +22,7 @@ struct MachogsApp: App {
     private let watchdogNotifier: WatchdogNotifier
 
     init() {
+        UsageAnalytics.shared.track("app.opened")
         let service: any MachogsServing = MachogsClient()
         let model = AppModel(service: service)
         let settings = AppSettings()

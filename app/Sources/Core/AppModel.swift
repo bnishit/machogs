@@ -131,8 +131,10 @@ public final class AppModel: ObservableObject {
             report = fresh
             lastSuccessfulScan = Date()
             watchdogEvent = watchdog.evaluate(fresh)
+            UsageAnalytics.shared.track("scan.completed", feature: .process, count: fresh.groups.count)
         } catch {
             scanError = error.localizedDescription
+            UsageAnalytics.shared.track("scan.completed", feature: .process, outcome: .failure)
         }
     }
 
@@ -144,6 +146,7 @@ public final class AppModel: ObservableObject {
         do {
             portsReport = try await service.inspectPorts()
             lastSuccessfulPortsScan = Date()
+            UsageAnalytics.shared.track("scan.completed", feature: .ports)
         }
         catch { portsError = error.localizedDescription }
     }
@@ -156,6 +159,7 @@ public final class AppModel: ObservableObject {
         do {
             diskReport = try await service.inspectDisk()
             lastSuccessfulDiskScan = Date()
+            UsageAnalytics.shared.track("scan.completed", feature: .disk)
         }
         catch { diskError = error.localizedDescription }
     }
@@ -168,6 +172,7 @@ public final class AppModel: ObservableObject {
         do {
             memoryReport = try await service.inspectMemory()
             lastSuccessfulMemoryScan = Date()
+            UsageAnalytics.shared.track("scan.completed", feature: .memory)
         }
         catch { memoryError = error.localizedDescription }
     }
@@ -180,6 +185,7 @@ public final class AppModel: ObservableObject {
         do {
             energyReport = try await service.inspectEnergy()
             lastSuccessfulEnergyScan = Date()
+            UsageAnalytics.shared.track("scan.completed", feature: .energy)
         }
         catch { energyError = error.localizedDescription }
     }
@@ -365,6 +371,7 @@ public final class AppModel: ObservableObject {
             case .disk: diskError = error.localizedDescription
             }
         }
+        UsageAnalytics.shared.track("action.completed", outcome: receipt?.isSuccess == true ? .success : .failure, count: receipt?.closedCount ?? 0)
         pendingReview = nil
     }
 

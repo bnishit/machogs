@@ -95,9 +95,7 @@ download. Publishing is deliberately outside these scripts.
 
 ## Privacy disclosure
 
-Machogs does not send analytics, telemetry, crash reports, process names, file
-paths, or any other user data off the Mac. It has no network client and no
-third-party SDK. It reads the current user's running processes, ports, memory,
+Machogs sends no usage data by default. An optional Settings switch sends a fixed-schema set of feature/outcome counts, app version and a random install ID to self-hosted Native Analytics. The server receives the connection IP. Events are kept for 90 days. Turning the switch off stops future tracking and resets the install ID; it does not erase already collected events. No process names, file paths, command arguments, scan contents or crash reports are sent. No third-party analytics SDK is used. It reads the current user's running processes, ports, memory,
 selected disk-usage locations, and its own local receipt log to explain the
 Mac's state. It stores settings and watchdog cooldowns in macOS preferences and
 writes close receipts to `~/Library/Logs/machogs.log`.
@@ -107,7 +105,7 @@ an engine-approved rebuildable cache, or request a restart. It never performs
 those actions merely because it scanned. Notifications and Start at Login are
 optional macOS features the user can turn off.
 
-`PrivacyInfo.xcprivacy` records no tracking and no collected data. It declares
+`PrivacyInfo.xcprivacy` records no cross-app advertising tracking; optional usage and device identifiers are disclosed. It declares
 the approved `CA92.1` reason for the app's own UserDefaults reads and writes.
 Review the manifest again if Apple changes the contract or a dependency is added.
 

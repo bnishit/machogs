@@ -354,3 +354,9 @@ only real fix, and the tool says so instead of pretending otherwise.
 ## License
 
 MIT
+
+## Optional usage analytics
+
+The Mac app's Settings has **Share anonymous feature usage**, off by default. It sends only feature/outcome counts, version and a random install ID to self-hosted Native Analytics. The receiver also sees your IP; events expire after 90 days. No process names, paths, command arguments or scan data are sent. Turning it off stops future tracking and resets the ID; previously sent events follow retention.
+
+The CLI stays offline unless you explicitly set `MACHOGS_ANALYTICS=1`. To disable it, unset that variable. Its fixed-schema relay has no embedded API key and cannot read the dashboard. These are client-reported usage signals, not verified security/audit evidence.

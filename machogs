@@ -182,7 +182,31 @@ fi
 # asked for; it costs nothing and keeps the reporting code in one place.
 ROWS=$(mktemp -t machogs-rows) || exit 1
 GRP=$(mktemp -t machogs-groups) || exit 1
-trap 'rm -f "$ROWS" "$GRP"' EXIT
+usage_event() {
+  [ "${MACHOGS_ANALYTICS:-0}" = 1 ] || return 0
+  case "$MODE" in report|plan|kill|fix|blame|brag|disk|memory|energy|check|ports) ;; *) return 0 ;; esac
+  local state_dir="${MACHOGS_TELEMETRY_STATE_DIR:-$HOME/Library/Application Support/machogs}"
+  local install_file="$state_dir/analytics-install-id" install_id event_id outcome=success feature=process
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  if [ ! -f "$install_file" ]; then (umask 077; uuidgen > "$install_file") || return 0; fi
+  install_id=$(cat "$install_file")
+  case "$install_id" in *[!A-Fa-f0-9-]*|'') return 0 ;; esac
+  [ "${#install_id}" -eq 36 ] || return 0
+  event_id=$(uuidgen)
+  [ "$1" -eq 0 ] || [ "$1" -eq 10 ] || outcome=failure
+  case "$MODE" in disk) feature=disk ;; memory) feature=memory ;; energy) feature=energy ;; ports) feature=ports ;; esac
+  # Fixed names and enums only: never inspect or transmit arguments, targets, paths or findings.
+  (curl -sS --max-time 2 --connect-timeout 1 -H 'Content-Type: application/json' \
+    --data "{\"id\":\"$event_id\",\"install_id\":\"$install_id\",\"consent\":true,\"event\":\"cli.$MODE\",\"version\":\"cli\",\"feature\":\"$feature\",\"outcome\":\"$outcome\"}" \
+    https://native-analytics-production.up.railway.app/v1/relay/machogs) >/dev/null 2>&1 &
+}
+machogs_exit() {
+  local code=$?
+  rm -f "$ROWS" "$GRP"
+  usage_event "$code"
+  return "$code"
+}
+trap machogs_exit EXIT
 
 # row <pid> <category> <action> <cpu> <age> <detail>
 # Tab-separated. Nothing here may contain a tab or newline; the fields are all

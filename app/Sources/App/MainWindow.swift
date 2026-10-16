@@ -963,12 +963,14 @@ struct SettingsPage: View {
     @State private var shoulderTaps: Bool
     @State private var startAtLogin: Bool
     @State private var soundOn: Bool
+    @State private var anonymousUsage: Bool
 
     init(settings: AppSettings) {
         self.settings = settings
         _shoulderTaps = State(initialValue: settings.shoulderTaps)
         _startAtLogin = State(initialValue: settings.startAtLogin)
         _soundOn = State(initialValue: settings.soundOn)
+        _anonymousUsage = State(initialValue: settings.anonymousUsage)
     }
 
     var body: some View {
@@ -990,6 +992,12 @@ struct SettingsPage: View {
                         .disabled(!soundOn)
                 }
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
+            }
+            Section("Usage analytics") {
+                Toggle("Share anonymous feature usage", isOn: $anonymousUsage)
+                    .onChange(of: anonymousUsage, perform: settings.setAnonymousUsage)
+                Text("Off by default. Shares feature names, success/failure, counts, app version and an anonymous install ID with self-hosted Native Analytics. The server sees your IP. No process names, paths, commands or scan contents. Events are kept for 90 days. Turning this off stops future collection and resets this install ID.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Safety") {
                 PromiseRow("Checks are read-only.")
