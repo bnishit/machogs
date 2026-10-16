@@ -1,1 +1,4 @@
 AppIcon.iconset/
+
+__pycache__/
+*.py[cod]
