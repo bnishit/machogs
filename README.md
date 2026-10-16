@@ -4,13 +4,20 @@
 
 **[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.0/Machogs-1.4.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
-> [!IMPORTANT]
-> The native Mac app is available as a signed and notarized universal download.
-> It includes a normal window, menu-bar Hogs, Storage and Ports views, Receipts,
-> and Settings. Every action has a named review, stable identity check, and a
-> fresh protection check; menu-bar and notification actions only open Review.
-> It needs macOS 13 or later and no admin password, Full Disk Access, or
-> Accessibility access. The open-source CLI remains available below.
+## The Mac app
+
+Machogs 1.4.0 is a free, signed and Apple-notarized Mac app. Start with
+**Overview** for a plain-English finding, a count of protected work left alone,
+and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
+when you need them. Actions open a review before anything closes or clears.
+
+**New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
+every feature, or change your choice later in **Settings → Privacy**.
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.0) ·
+[Privacy details](https://bnishit.github.io/machogs/privacy.html)
+
+The app needs macOS 13 or later. No admin password, Full Disk Access, or
+Accessibility access is required. Prefer Terminal? [Install the CLI](#install-the-cli).
 
 The local app also checks whole-app memory every 30 seconds. It adds up the
 app and its background tools, including compressed memory. Large memory use,
@@ -176,6 +183,32 @@ Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
 Start at Login, quit Machogs, then move it from Applications to Trash. Local
 receipts and preferences remain unless you remove them separately.
 
+## Privacy and optional analytics
+
+Checks run on your Mac. Scan results, process names, file paths, messages, and
+cleanup receipts are never included in analytics. The CLI sends no analytics.
+
+The app and website have separate, optional choices. Both start off:
+
+| If you opt in… | What is measured |
+|---|---|
+| Mac app | First observed use after opting in, and one event per UTC week when you open the app or its menu |
+| Website | Landing-page visits and clicks on Mac download buttons |
+
+App events include the version, a random installation ID, and whether this was
+a new setup or an existing installation. Website IDs last for one page load and
+are not linked to app IDs. Events go to PostHog; there is no session recording
+or automatic capture of your activity. Background scans do not count as app use.
+
+Turn app sharing off in **Settings → Privacy**. This cancels pending sends and
+clears the local analytics ID; it does not erase events already received.
+Change the website choice on the [privacy page](https://bnishit.github.io/machogs/privacy.html).
+
+These are opted-in usage counts, not an exact install count. Download clicks do
+not prove installation, existing users are counted separately from new setups,
+and resetting preferences or opting in again can create another ID.
+[Measurement details for contributors](docs/analytics.md).
+
 ## Install the CLI
 
 ```sh
@@ -199,21 +232,50 @@ Claude Code, Codex, Cursor:
 > tell me what is hogging my Mac. Show me the findings and ask before closing
 > a process, freeing a port, or clearing a cache.
 
-## Use
+## Use the CLI
+
+Start with a scan, then choose what to close:
 
 ```sh
-machogs              # plain answer. Closes nothing.
-machogs fix          # go through them one at a time, asking before each
-machogs blame        # scoreboard: which app leaves the most junk behind
-machogs brag         # a shareable card of what your Mac has been wasting
-machogs disk         # read-only storage report
-machogs disk clear <path> # clear one engine-approved safe cache, after consent
-machogs ports        # every port in use and who is squatting it
-machogs port 3000    # read-only port report; add `kill` only after consent
-machogs --details    # the technical report, by category
-machogs --json       # machine-readable, for agents
-machogs --check      # audit the safety rules, close nothing
+machogs              # scan only; nothing closes
+machogs fix          # review each finding group in your terminal
 ```
+
+The review names the app and explains what it left behind. Save your work first.
+For each group, press **y** to close it, **Enter** to leave it alone, or **q** to
+stop. A typo asks again. The CLI rechecks the reviewed processes before closing
+and counts only successful closes in the receipt.
+
+```text
+Scan → read the finding → y / Enter / q → see what actually closed
+```
+
+For other questions, start with a read-only command:
+
+| Question | Command |
+|---|---|
+| Where did my storage go? | `machogs disk` |
+| Who holds port 3000? | `machogs port 3000` |
+| What else is listening? | `machogs ports` |
+| Which apps leave the most behind? | `machogs blame` |
+| What leaked this week? | `machogs blame --since=7d` |
+| What did machogs close recently? | `machogs history` |
+| Can I share my cleanup receipt? | `machogs brag` |
+| Can I see technical findings? | `machogs --details` |
+| Are my coding sessions protected? | `machogs --check` |
+| What commands are available? | `machogs --help` |
+
+**Actions are separate.** After reviewing the owner and protections,
+`machogs port 3000 kill` closes an eligible listener without another prompt.
+After reviewing the storage report, `machogs disk clear "/exact/path"` clears
+one reported safe cache or the Trash. Use the exact path; “check first” and
+“your call” locations cannot be cleared by this command.
+
+`machogs fix` needs a terminal. For agents, begin with
+`machogs --json --sessions` and follow [AGENTS.md](AGENTS.md): show the finding,
+get approval, then act. `machogs kill` is an unattended action with no prompts;
+it is not a substitute for reviewing findings. Report exit code **10** means
+there is something to review, not that the scan crashed.
 
 ## Closing something should feel like a win
 
@@ -248,6 +310,12 @@ since 2026-08-17
   a Claude Code plugin              1   91 hours
 ```
 
+Add `--since=7d` (any number of days) to count only recent closes, or
+`--json` to get the scoreboard as one object for scripts and agents. Without
+`--since`, a LAST 7D column shows whether each app is still leaking.
+`--app=ChatGPT` narrows it to one app. `machogs history` lists the closes
+themselves, newest first, and takes the same `--since`, `--app` and `--json`.
+
 And `machogs brag` prints the same thing as something you can paste:
 
 ```
@@ -273,19 +341,19 @@ And `machogs brag` prints the same thing as something you can paste:
   Idle, but holding memory. Oldest has sat there 31 minutes.
   A duplicate. One app started the same helper many times over.
 
-  Close all 11? [y/N]
+  Close 11 programs? [y/N/q]
 ```
 
-## This will not eat your homework
+## Safety before cleanup
 
 It closes programs. That deserves your suspicion, so here is what stops it
 hurting you:
 
 - **It never closes anything on its own.** Running `machogs` only looks. `fix`
   asks you about every single item.
-- **It will never close a coding session.** Codex and Claude Code sessions, and their
-  helpers, are listed and skipped. You do not lose
-  unsaved work.
+- **Live coding sessions are protected.** Running Codex and Claude Code sessions
+  and their helpers are listed and skipped. Closing other programs can lose
+  unsaved work, so review the finding before choosing to close one.
 - **It only touches your own programs.** macOS system processes are out of
   scope entirely.
 - **Programs that are meant to work hard are left alone** — video encoders,
