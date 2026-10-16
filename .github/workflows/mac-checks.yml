@@ -1,0 +1,24 @@
+name: Mac checks
+on:
+  push:
+    branches: [main, feat/native-analytics]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check CLI syntax and opt-in telemetry
+        run: |
+          bash -n machogs
+          python3 -m unittest discover -s tests
+          plutil -lint app/PrivacyInfo.xcprivacy
+      - name: Test Mac core
+        run: swift test --package-path app
+      - name: Build development app
+        env:
+          MACHOGS_CHANNEL: dev
+        run: ./app/build.sh
