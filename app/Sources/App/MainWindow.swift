@@ -38,6 +38,7 @@ struct MainWindow: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var router: AppRouter
+    @Environment(\.openWindow) private var openWindow
     @State private var celebrationTrigger = 0
     @State private var appeared = false
 
@@ -116,6 +117,13 @@ struct MainWindow: View {
     private var memoryStatus: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("App memory · checked every 30 seconds").font(.callout.weight(.semibold))
+            if let event = model.watchdogEvent, event.kind == .memory {
+                HStack {
+                    Text(event.title).font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                    Spacer()
+                    Button("Review memory warning") { openWindow(id: "bust") }
+                }
+            }
             if let error = model.memoryScanError {
                 Text(error).foregroundStyle(.orange)
             }

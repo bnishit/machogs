@@ -137,7 +137,7 @@ private struct IslandView: View {
             if receipt == nil {
                 Button {
                     if event.kind == .memory {
-                        NSWorkspace.shared.open(URL(string: "\(MachogsBuild.urlScheme)://bust")!)
+                        NSWorkspace.shared.open(URL(string: "\(MachogsBuild.urlScheme)://now")!)
                         leave()
                         return
                     }
