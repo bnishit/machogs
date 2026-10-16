@@ -88,6 +88,17 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var lastSuccessfulDiskScan: Date?
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
+    @Published public var automaticCleanupEnabled: Bool {
+        didSet {
+            defaults.set(automaticCleanupEnabled, forKey: "automaticAbandonedCleanup")
+            abandonedSince.removeAll()
+        }
+    }
+    @Published public private(set) var automaticCleanupStatus = "No automatic cleanup yet."
+    private let defaults: UserDefaults
+    private var abandonedSince: [ProcessTarget: Date] = [:]
+    private var lastAbandonedCheck: Date?
+
     private let service: any MachogsServing
     @Published public private(set) var memorySnapshot: MemorySnapshot?
     @Published public private(set) var memoryScanError: String?
@@ -96,8 +107,10 @@ public final class AppModel: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var watchdog = WatchdogPolicy()
 
-    public init(service: any MachogsServing) {
+    public init(service: any MachogsServing, defaults: UserDefaults = .standard) {
         self.service = service
+        self.defaults = defaults
+        automaticCleanupEnabled = defaults.bool(forKey: "automaticAbandonedCleanup")
     }
 
     public var groups: [FindingGroup] { report?.groups ?? [] }
@@ -133,8 +146,44 @@ public final class AppModel: ObservableObject {
             scanError = nil
             lastSuccessfulScan = Date()
             if let event = watchdog.evaluate(fresh) { watchdogEvent = event }
+            await cleanAbandonedHelpers()
         } catch {
+            abandonedSince.removeAll()
+            lastAbandonedCheck = nil
             scanError = error.localizedDescription
+        }
+    }
+
+    public func cleanAbandonedHelpers(now: Date = Date()) async {
+        guard automaticCleanupEnabled, !isActing, !isReviewing, pendingReview == nil else {
+            abandonedSince.removeAll()
+            return
+        }
+        do {
+            let fresh = try await service.scanAbandoned()
+            guard automaticCleanupEnabled else { abandonedSince.removeAll(); return }
+            if let last = lastAbandonedCheck, now.timeIntervalSince(last) > 120 || now < last {
+                abandonedSince.removeAll()
+            }
+            lastAbandonedCheck = now
+            let candidates = Set(fresh.actionableFindings.filter { $0.section == "2" && $0.action == .reapable }
+                .map { ProcessTarget(pid: $0.pid, identity: $0.identity) })
+            // A missed/failed poll restarts the five-minute observation window.
+            abandonedSince = abandonedSince.filter { candidates.contains($0.key) && now.timeIntervalSince($0.value) >= 0 }
+            for target in candidates where abandonedSince[target] == nil { abandonedSince[target] = now }
+            let ready = candidates.filter { now.timeIntervalSince(abandonedSince[$0]!) >= 300 }
+            guard !ready.isEmpty, !isActing, !isReviewing, pendingReview == nil else { return }
+            isActing = true
+            defer { isActing = false }
+            let result = try await service.closeAbandoned(targets: Array(ready))
+            for target in ready { abandonedSince.removeValue(forKey: target) }
+            let closed = result.killedFindings.count
+            automaticCleanupStatus = closed > 0
+                ? "Automatically closed \(closed) abandoned helper\(closed == 1 ? "" : "s"). Live sessions were left alone."
+                : "Rechecked abandoned helpers. Nothing confirmed closed."
+        } catch {
+            abandonedSince.removeAll()
+            automaticCleanupStatus = "Automatic cleanup check failed. Nothing else was closed."
         }
     }
 

@@ -75,6 +75,7 @@ E_PIG="🐷 "; E_OK="✨ "; E_FIRE="🔥 "; E_ZZZ="💤 "; E_CLONE="👯 "
 E_PARTY="🎉 "; E_ZAP="⚡ "; E_BROOM="🧹 "; E_CROWN=" 👑"
 [ -t 1 ] || { E_PIG=; E_OK=; E_FIRE=; E_ZZZ=; E_CLONE=; E_PARTY=; E_ZAP=; E_BROOM=; E_CROWN=; }
 
+ABANDONED_ONLY=0
 MODE=report; DUPES=0; SHOW_SESSIONS=0; JSON=0; DETAILS=0; PORTS=0; PORT_NUM=""; CLEAR_PATH=""; TARGETS=""; SINCE_DAYS=""; APP_FILTER=""
 for a in "$@"; do
   case "$a" in
@@ -92,6 +93,7 @@ for a in "$@"; do
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
     [0-9]*)      if [ "$PORTS" -eq 1 ]; then PORT_NUM=$a; else
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
+    --abandoned-only) ABANDONED_ONLY=1 ;;
     --dupes)     DUPES=1 ;;
     --target=*)
       target=${a#--target=}; target_pid=${target%%:*}; target_id=${target#*:}
@@ -129,6 +131,13 @@ esac
 if [ "$MODE" = plan ] && { [ -z "$TARGETS" ] || [ "$JSON" -ne 1 ]; }; then
   echo "plan needs --json and at least one --target=PID:IDENTITY" >&2
   exit 2
+fi
+
+if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then
+  if [ "$PORTS" -eq 1 ] || { [ "$MODE" != report ] && [ "$MODE" != kill ]; } || { [ "$MODE" = kill ] && [ -z "$TARGETS" ]; }; then
+    echo "--abandoned-only supports a read-only report or kill with exact targets" >&2
+    exit 2
+  fi
 fi
 
 # `fix` confirms every single close with the person sitting there, so the
@@ -466,6 +475,40 @@ protected() {
     case "$AGENT_SAFE"  in *" $a "*) return 0 ;; esac
   done
   return 1
+}
+
+# Automatic cleanup is narrower than manual review. Any missing evidence leaves
+# the process alone. Open IPC, terminals, children, and file descriptors can
+# carry a live session even after launchd adopts its process.
+abandoned_helper() {
+  local pid=$1 uid pp tty cpu handles
+  is_mcp "$pid" || return 1
+  uid=$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ "$uid" = "$(id -u)" ] || return 1
+  pp=$(ppid_of "$pid"); [ "$pp" = 1 ] || return 1
+  tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ "$tty" = '??' ] || return 1
+  cpu=$(cpu_of "$pid")
+  awk -v c="$cpu" 'BEGIN {exit !(c != "" && c+0 <= 2)}' || return 1
+  # A launch agent may legitimately be parented by launchd. Keep any process
+  # registered as a job, and fail closed if launchctl cannot inspect it.
+  local jobs
+  jobs=$(launchctl list 2>/dev/null) || return 1
+  echo "$jobs" | awk -v p="$pid" '$1==p {found=1} END {exit !found}' && return 1
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null); local child_status=$?
+  [ "$child_status" -eq 1 ] && [ -z "$children" ] || return 1
+  handles=$(lsof -nP -a -p "$pid" -F ftn 2>/dev/null) || return 1
+  printf '%s\n' "$handles" | awk -v p="$pid" '
+    function check() {if (record && (!typed || (numeric && !named))) bad=1}
+    /^p/ {seen=($0 == "p" p)}
+    /^f/ {check(); record=1; records++; fd=substr($0,2); numeric=(fd ~ /^[0-9]/); named=0; typed=0
+          if (!numeric && fd != "cwd" && fd != "rtd" && fd != "txt" && fd != "mem") bad=1}
+    /^t/ {typed=1; t=substr($0,2); if (t != "REG" && t != "DIR" && t != "CHR") bad=1}
+    /^n/ {if (numeric && substr($0,2) != "/dev/null") bad=1; if (numeric) named=1}
+    END {check(); exit !(seen && records && !bad)}' || return 1
+  protected "$pid" && return 1
+  [ "$(ppid_of "$pid")" = 1 ]
 }
 
 # ---- blame / brag ---------------------------------------------------------
@@ -959,6 +1002,9 @@ QUEUED_PIDS=""
 queue() {
   local pid=$1 reason=$2 identity
   alive "$pid" || return
+  if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then
+    [ "$SECTION" = 2 ] && abandoned_helper "$pid" || return
+  fi
   identity=$(identity_of "$pid"); [ -n "$identity" ] || return
   # A targeted app request is deliberately narrow. A reused or already-gone
   # process does not match, is not shown in the fresh plan, and cannot be
@@ -991,6 +1037,8 @@ flush_kills() {
     alive "$pid" || continue
     # Protection is time-sensitive. Check again at the last possible moment,
     # not only when the detector first queued the process.
+    CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
+    AGENT_SAFE=" $(codex_app_pids | tr '\n' ' ') "
     if protected "$pid"; then
       echo "    ${DIM}skip${NC} $pid ${DIM}(became protected before close)${NC}"
       continue
@@ -1003,11 +1051,23 @@ flush_kills() {
     local who what cpu csec
     who=$(whose "$pid"); what=$(whatis "$pid")
     cpu=$(cpu_of "$pid"); csec=$(cputime_of "$pid")
-    if kill -9 "$pid" 2>/dev/null; then
+    local closed=0
+    if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then
+      abandoned_helper "$pid" || continue
+      [ "$(identity_of "$pid")" = "$identity" ] || continue
+      if kill -TERM "$pid" 2>/dev/null; then
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          if ! alive "$pid"; then closed=1; break; fi
+          sleep 0.2
+        done
+      fi
+    elif kill -9 "$pid" 2>/dev/null; then closed=1; fi
+    if [ "$closed" -eq 1 ]; then
       KILLED=$((KILLED+1))
       KILLED_PIDS="$KILLED_PIDS $pid"
       FREED_CPU=$(awk -v a="$FREED_CPU" -v b="${cpu:-0}" 'BEGIN{printf "%.1f", a+b}')
       FREED_CSEC=$((FREED_CSEC + csec))
+      if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then what="automatic cleanup: $what"; fi
       logclose "$pid" "$who" "$what" "$cpu" "$csec"
       echo "    ${RED}killed${NC} $pid ${DIM}($reason)${NC}"
     fi
@@ -1287,6 +1347,7 @@ if [ "$JSON" -eq 1 ]; then
   first=1
   while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
     [ -n "$p" ] || continue
+    if [ "${ABANDONED_ONLY:-0}" -eq 1 ] && [ "$sec" != 2 ]; then continue; fi
     if [ -n "$TARGETS" ] && ! targeted "$p" "$identity"; then continue; fi
     # a queued process that flush_kills actually reaped is reported as killed
     case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac

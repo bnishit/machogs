@@ -71,7 +71,7 @@ class SessionSafetyTests(unittest.TestCase):
 
     def test_fresh_protection_stops_an_already_queued_close(self):
         output = self.run_engine('/Applications/Other.app/Contents/MacOS/Other', 1,
-                                 'AGENT_SAFE=" 20 "; MODE=kill; flush_kills; echo DONE')
+                                 'APP_COMMAND="/Applications/Codex.app/Contents/MacOS/Codex"; MODE=kill; flush_kills; echo DONE')
         self.assertIn('became protected before close', output)
 
     def test_reused_process_identity_stops_an_already_queued_close(self):

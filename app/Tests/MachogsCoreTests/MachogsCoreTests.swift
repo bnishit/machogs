@@ -271,6 +271,63 @@ final class MachogsCoreTests: XCTestCase {
         return try JSONDecoder().decode(EngineReport.self, from: data)
     }
 
+    @MainActor
+    func testAutomaticCleanupRequiresOptInAndFiveContinuousMinutes() async throws {
+        let report = try fixture([finding(pid: 10, identity: "old")])
+        let killed = try fixture([finding(pid: 10, identity: "old", action: "killed")], mode: "kill", killed: 1)
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: killed)
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let model = AppModel(service: fake, defaults: defaults)
+        let start = Date(timeIntervalSince1970: 1_000)
+        await model.cleanAbandonedHelpers(now: start)
+        XCTAssertEqual(fake.abandonedScans, 0)
+        model.automaticCleanupEnabled = true
+        XCTAssertTrue(defaults.bool(forKey: "automaticAbandonedCleanup"))
+        for minute in 0..<5 {
+            await model.cleanAbandonedHelpers(now: start.addingTimeInterval(Double(minute * 60)))
+            XCTAssertTrue(fake.automaticTargets.isEmpty)
+        }
+        await model.cleanAbandonedHelpers(now: start.addingTimeInterval(300))
+        XCTAssertEqual(fake.automaticTargets, [ProcessTarget(pid: 10, identity: "old")])
+        XCTAssertTrue(fake.closeTargets.isEmpty, "Must use the stricter engine path")
+        XCTAssertTrue(model.automaticCleanupStatus.contains("Automatically closed 1"))
+    }
+
+    @MainActor
+    func testAutomaticCleanupResetsOnSleepFailureIdentityChangeOrDisappearance() async throws {
+        for change in ["sleep", "failure", "identity", "gone", "disabled"] {
+            let report = try fixture([finding(pid: 10, identity: "old")])
+            let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+            let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            model.automaticCleanupEnabled = true
+            let start = Date(timeIntervalSince1970: 1_000)
+            for minute in 0..<5 { await model.cleanAbandonedHelpers(now: start.addingTimeInterval(Double(minute * 60))) }
+            switch change {
+            case "failure": fake.abandonedError = MachogsClientError.invalidResponse
+            case "identity": fake.abandonedReport = try fixture([finding(pid: 10, identity: "new")])
+            case "gone": fake.abandonedReport = try fixture([])
+            case "disabled": model.automaticCleanupEnabled = false
+            default: break
+            }
+            await model.cleanAbandonedHelpers(now: start.addingTimeInterval(change == "sleep" ? 500 : 300))
+            XCTAssertTrue(fake.automaticTargets.isEmpty, change)
+        }
+    }
+
+    @MainActor
+    func testAutomaticCleanupLeavesProtectedDuplicatesAndUnrelatedFindings() async throws {
+        let rows = [finding(pid: 10, identity: "live", action: "protected"),
+                    finding(pid: 11, identity: "session", action: "never-killed"),
+                    finding(pid: 12, identity: "dupe", action: "needs-dupes-flag"),
+                    finding(pid: 13, identity: "spinner").replacingOccurrences(of: "\"section\":\"2\"", with: "\"section\":\"1b\"")]
+        let report = try fixture(rows)
+        let fake = FakeService(scanReport: report, planReport: report, closeReport: report)
+        let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        model.automaticCleanupEnabled = true
+        for minute in 0...6 { await model.cleanAbandonedHelpers(now: Date(timeIntervalSince1970: Double(1_000 + minute * 60))) }
+        XCTAssertTrue(fake.automaticTargets.isEmpty)
+    }
+
     private func finding(pid: Int, identity: String, action: String = "reapable", owner: String = "ChatGPT", what: String = "browser helper", story: String = "ChatGPT left a helper behind.", cpu: Double = 0) -> String {
         """
         {"pid":\(pid),"identity":"\(identity)","section":"2","action":"\(action)","cpu":\(cpu),"cpu_seconds":12,"age":"01:00:00","owner":"\(owner)","what":"\(what)","detail":"orphaned helper","story":"\(story)"}
@@ -308,6 +365,10 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     var planReport: EngineReport
     var closeReport: EngineReport
     var memorySnapshot: MemorySnapshot?
+    var abandonedReport: EngineReport?
+    var abandonedError: Error?
+    var automaticTargets: [ProcessTarget] = []
+    var abandonedScans = 0
     var scanError: Error?
     var diskReport: DiskReport?
     var diskError: Error?
@@ -326,6 +387,15 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
         self.closeReport = closeReport
     }
 
+    func scanAbandoned() async throws -> EngineReport {
+        abandonedScans += 1
+        if let abandonedError { throw abandonedError }
+        return abandonedReport ?? scanReport
+    }
+    func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport {
+        automaticTargets = targets
+        return closeReport
+    }
     func inspectMemory() async throws -> MemorySnapshot {
         guard let memorySnapshot else { throw MachogsClientError.invalidResponse }
         return memorySnapshot

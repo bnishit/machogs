@@ -167,7 +167,7 @@ struct MainWindow: View {
         case .ports: PortsPage(model: model)
         case .storage: StoragePage(model: model)
         case .receipts: ReceiptsPage(model: model, openNow: { router.page = .now })
-        case .settings: SettingsPage(settings: settings)
+        case .settings: SettingsPage(settings: settings, model: model)
         }
     }
 
@@ -420,7 +420,7 @@ struct ReceiptsPage: View {
             VStack(alignment: .leading, spacing: 16) {
                 PageIntro(title: "Your receipts", detail: sinceText)
                 if history.isEmpty {
-                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something you approve, the score starts here.")
+                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something, the score starts here.")
                     Button("Check my Mac", action: openNow)
                 } else {
                     heroRow.joyReveal(appeared, delay: 0.02)
@@ -440,7 +440,7 @@ struct ReceiptsPage: View {
 
     private var sinceText: String {
         guard let since = history.map(\.date).min() else {
-            return "A receipt appears only after MacHogs successfully closes something you approved."
+            return "A receipt appears only after MacHogs confirms a process closed, manually or automatically."
         }
         return "What your Mac was doing behind your back · since \(since.formatted(.dateTime.day().month()))"
     }
@@ -602,12 +602,14 @@ struct AppScore: Identifiable {
 }
 
 struct SettingsPage: View {
+    @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @State private var shoulderTaps: Bool
     @State private var startAtLogin: Bool
     @State private var soundOn: Bool
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, model: AppModel) {
+        self.model = model
         self.settings = settings
         _shoulderTaps = State(initialValue: settings.shoulderTaps)
         _startAtLogin = State(initialValue: settings.startAtLogin)
@@ -619,12 +621,16 @@ struct SettingsPage: View {
             Section("Background") {
                 Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
-                Text("Alerts open MacHogs. They never close anything.").font(.caption).foregroundStyle(.secondary)
+                Text("Alerts open MacHogs for review.").font(.caption).foregroundStyle(.secondary)
                 notificationRow
                 Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
+                Toggle("Automatically clean confirmed abandoned helpers", isOn: $model.automaticCleanupEnabled)
+                Text("Only disconnected automation helpers, abandoned for five minutes. Live sessions, connected helpers and uncertain cases stay open. Off by default.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(model.automaticCleanupStatus).font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Toggle("Play sounds", isOn: $soundOn)
                         .onChange(of: soundOn, perform: settings.setSound)
@@ -647,8 +653,8 @@ struct SettingsPage: View {
                 Link("Privacy details", destination: AppSettings.privacyURL)
             }
             Section("Safety") {
-                PromiseRow("Checks are read-only.")
-                PromiseRow("Before anything closes, you see it and the engine checks it again.")
+                PromiseRow("Checks are read-only unless automatic cleanup is enabled.")
+                PromiseRow("Automatic cleanup only closes confirmed abandoned helpers. Other cleanup needs your review. Every close is checked again.")
                 PromiseRow("Live coding sessions and macOS stay protected.")
                 PromiseRow("Personal files never get a delete button.")
             }
