@@ -9,7 +9,7 @@ struct MenuBarIcon: View {
         ZStack(alignment: .topTrailing) {
             Text(model.watchdogEvent != nil ? "📸" : "🐷")
                 .font(.system(size: 13)).frame(width: 18, height: 18)
-            if model.scanError != nil || model.hasHotFinding {
+            if model.scanError != nil || model.memoryScanError != nil || model.hasHotFinding {
                 Circle()
                     .fill(model.hasHotFinding ? Color.red : Color.orange)
                     .frame(width: 6, height: 6)
@@ -22,7 +22,7 @@ struct MenuBarIcon: View {
     }
 
     private var label: String {
-        if model.scanError != nil { return "Machogs needs attention" }
+        if model.scanError != nil || model.memoryScanError != nil { return "Machogs needs attention" }
         if model.watchdogEvent != nil { return "Machogs caught something" }
         if model.hasHotFinding { return "Machogs found hot background work" }
         if !model.groups.isEmpty { return "Machogs found unused background work" }
@@ -148,6 +148,17 @@ struct MenuBarView: View {
                     Text(status.title).font(.system(size: 21, weight: .semibold, design: .rounded))
                     Text(status.detail).font(.callout).foregroundStyle(.secondary)
                 }.padding(.vertical, 6)
+            }
+            if let event = model.watchdogEvent, event.kind == .memory {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(event.title).font(.callout.weight(.semibold))
+                    Text(event.body).font(.caption).foregroundStyle(.secondary)
+                    Button("Show memory use") { openMain(.now) }
+                }
+                .padding(10).background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
+            if let error = model.memoryScanError {
+                Text(error).font(.caption).foregroundStyle(.orange)
             }
             if settings.notificationsDenied { notificationsDeniedRow }
             if model.hasSwapPressure && !model.isStale { swapCard }

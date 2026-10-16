@@ -2,6 +2,7 @@ import Foundation
 
 public protocol MachogsServing: Sendable {
     func scan() async throws -> EngineReport
+    func inspectMemory() async throws -> MemorySnapshot
     func planClose(targets: [ProcessTarget]) async throws -> EngineReport
     func closeReviewed(targets: [ProcessTarget]) async throws -> EngineReport
     func inspectPorts() async throws -> PortsReport
@@ -10,6 +11,10 @@ public protocol MachogsServing: Sendable {
     func inspectDisk() async throws -> DiskReport
     func clearDisk(path: String) async throws -> DiskClearResult
     func shareCard() async throws -> String
+}
+
+public extension MachogsServing {
+    func inspectMemory() async throws -> MemorySnapshot { throw MachogsClientError.invalidResponse }
 }
 
 public enum MachogsClientError: LocalizedError, Equatable {
@@ -64,6 +69,10 @@ public struct MachogsClient: MachogsServing {
 
     public static func closeArguments(for targets: [ProcessTarget]) -> [String] {
         ["kill", "--json", "--sessions", "--dupes"] + targetArguments(targets)
+    }
+
+    public func inspectMemory() async throws -> MemorySnapshot {
+        try await MemoryMonitor.sample()
     }
 
     public func scan() async throws -> EngineReport {

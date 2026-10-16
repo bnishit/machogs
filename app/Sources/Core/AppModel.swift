@@ -89,6 +89,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
     private let service: any MachogsServing
+    @Published public private(set) var memorySnapshot: MemorySnapshot?
+    @Published public private(set) var memoryScanError: String?
+
+    private var memoryPollingTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var watchdog = WatchdogPolicy()
 
@@ -103,6 +107,12 @@ public final class AppModel: ObservableObject {
 
     public func startPolling() {
         guard pollingTask == nil else { return }
+        memoryPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.sampleMemory()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
         pollingTask = Task { [weak self] in
             await self?.scan()
             while !Task.isCancelled {
@@ -122,9 +132,20 @@ public final class AppModel: ObservableObject {
             report = fresh
             scanError = nil
             lastSuccessfulScan = Date()
-            watchdogEvent = watchdog.evaluate(fresh)
+            if let event = watchdog.evaluate(fresh) { watchdogEvent = event }
         } catch {
             scanError = error.localizedDescription
+        }
+    }
+
+    public func sampleMemory() async {
+        do {
+            let fresh = try await service.inspectMemory()
+            memorySnapshot = fresh
+            memoryScanError = nil
+            if let event = watchdog.evaluateMemory(fresh) { watchdogEvent = event }
+        } catch {
+            memoryScanError = "Memory check failed. The last reading may be old."
         }
     }
 

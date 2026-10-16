@@ -248,6 +248,22 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertTrue(fake.closedPortTargets.isEmpty)
     }
 
+    @MainActor
+    func testMemoryMonitorWarnsWithoutOfferingProtectedWorkForCleanup() async throws {
+        let empty = try fixture([])
+        let fake = FakeService(scanReport: empty, planReport: empty, closeReport: empty)
+        fake.memorySnapshot = MemorySnapshot(
+            apps: [AppMemory(app: "ChatGPT", memoryMB: 32942, compressedMB: 24000, processCount: 200)],
+            physicalMB: 16384, swapUsedMB: 15800)
+        let model = AppModel(service: fake)
+        await model.sampleMemory()
+        XCTAssertEqual(model.watchdogEvent?.kind, .memory)
+        XCTAssertTrue(model.watchdogEvent?.targets.isEmpty == true)
+        XCTAssertTrue(model.groups.isEmpty)
+        XCTAssertTrue(fake.closeTargets.isEmpty)
+        XCTAssertNil(model.memoryScanError)
+    }
+
     private func fixture(_ findings: [String], mode: String = "report", killed: Int = 0) throws -> EngineReport {
         let data = """
         {"mode":"\(mode)","host":{"load":1.5,"cores":8,"swap_used_mb":10,"swap_total_mb":100,"swap_pct":10,"uptime_days":2},"summary":{"reapable":\(findings.count),"killed":\(killed)},"findings":[\(findings.joined(separator: ","))]}
@@ -291,6 +307,7 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
     var scanReport: EngineReport
     var planReport: EngineReport
     var closeReport: EngineReport
+    var memorySnapshot: MemorySnapshot?
     var scanError: Error?
     var diskReport: DiskReport?
     var diskError: Error?
@@ -309,6 +326,10 @@ private final class FakeService: MachogsServing, @unchecked Sendable {
         self.closeReport = closeReport
     }
 
+    func inspectMemory() async throws -> MemorySnapshot {
+        guard let memorySnapshot else { throw MachogsClientError.invalidResponse }
+        return memorySnapshot
+    }
     func scan() async throws -> EngineReport {
         if let scanError { throw scanError }
         return scanReport

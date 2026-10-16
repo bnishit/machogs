@@ -13,15 +13,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 cd "$ROOT"
 
-# Full Xcode is required for a reproducible app build. Prefer the selected
-# toolchain, but use the standard Xcode install without changing global state.
-if ! xcodebuild -version >/dev/null 2>&1; then
-    if [ -d /Applications/Xcode.app/Contents/Developer ]; then
-        export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-    else
-        echo "Full Xcode is required. Install it and select its developer directory." >&2
-        exit 1
-    fi
+# The command-line tools can build the app with their matching macOS SDK.
+# Do not switch to a different, possibly unconfigured Xcode installation.
+if ! xcrun --find swift >/dev/null 2>&1 || ! xcrun --sdk macosx --show-sdk-path >/dev/null 2>&1; then
+    echo "Swift and the macOS SDK are required. Install the Xcode command-line tools." >&2
+    exit 1
 fi
 
 IDENTITY="${1:--}"

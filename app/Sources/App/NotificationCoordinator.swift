@@ -12,12 +12,12 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let close = UNNotificationAction(identifier: "CLOSE", title: "Review", options: [.foreground])
         let review = UNNotificationAction(identifier: "REVIEW", title: "Show me", options: [.foreground])
         center.setNotificationCategories([
-            UNNotificationCategory(identifier: "MACHOGS_REVIEW", actions: [close, review], intentIdentifiers: [])
+            UNNotificationCategory(identifier: "MACHOGS_REVIEW", actions: [close, review], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "MACHOGS_MEMORY", actions: [review], intentIdentifiers: [])
         ])
     }
 
     func post(_ event: WatchdogEvent, sound: Bool) {
-        guard !event.targets.isEmpty else { return }
         Task {
             let center = UNUserNotificationCenter.current()
             var settings = await center.notificationSettings()
@@ -34,7 +34,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             let content = UNMutableNotificationContent()
             content.title = event.title
             content.body = event.body
-            content.categoryIdentifier = "MACHOGS_REVIEW"
+            content.categoryIdentifier = event.kind == .memory ? "MACHOGS_MEMORY" : "MACHOGS_REVIEW"
             content.userInfo["targets"] = event.targets.map { "\($0.pid):\($0.identity)" }
             if sound { content.sound = .default }
             do {
@@ -57,7 +57,8 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let values = response.notification.request.content.userInfo["targets"] as? [String] ?? []
         var components = URLComponents()
         components.scheme = MachogsBuild.urlScheme
-        components.host = response.actionIdentifier == "CLOSE" ? "close" : "now"
+        components.host = response.notification.request.content.categoryIdentifier == "MACHOGS_MEMORY"
+            ? "now" : response.actionIdentifier == "CLOSE" ? "close" : "now"
         components.queryItems = values.map { URLQueryItem(name: "target", value: $0) }
         if let url = components.url { NSWorkspace.shared.open(url) }
     }
