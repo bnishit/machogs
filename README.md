@@ -2,7 +2,7 @@
 
 **Finds the hog. Names the app. Closes nothing without you.**
 
-**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.0/Machogs-1.4.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.1/Machogs-1.4.1.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 ## The Mac app
 
@@ -13,7 +13,7 @@ when you need them. Actions open a review before anything closes or clears.
 
 **New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
 every feature, or change your choice later in **Settings → Privacy**.
-[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.0) ·
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.1) ·
 [Privacy details](https://bnishit.github.io/machogs/privacy.html)
 
 The app needs macOS 13 or later. No admin password, Full Disk Access, or
@@ -176,7 +176,7 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ## Install the Mac app
 
-[Download Machogs 1.4.0](https://github.com/bnishit/machogs/releases/download/v1.4.0/Machogs-1.4.0.dmg), open the DMG, and drag Machogs to Applications.
+[Download Machogs 1.4.1](https://github.com/bnishit/machogs/releases/download/v1.4.1/Machogs-1.4.1.dmg), open the DMG, and drag Machogs to Applications.
 
 The app is signed with Developer ID, notarized by Apple, and includes both
 Apple silicon and Intel code. The first scan only looks. To uninstall: turn off

@@ -10,7 +10,7 @@
 
 Download Machogs 1.4.0:
 
-    https://github.com/bnishit/machogs/releases/download/v1.4.0/Machogs-1.4.0.dmg
+    https://github.com/bnishit/machogs/releases/download/v1.4.1/Machogs-1.4.1.dmg
 
 Open the DMG and drag Machogs to Applications. The app supports Apple silicon
 and Intel. Its first scan is read-only. One-tap Close actions re-verify every target
