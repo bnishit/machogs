@@ -86,6 +86,9 @@ struct MainWindow: View {
                             .padding(.top, 14)
                     }
                 }
+                if router.page == .now {
+                    memoryStatus.padding(.horizontal, 18).padding(.top, 12)
+                }
                 page
             }
             .navigationTitle(router.page.title)
@@ -108,6 +111,30 @@ struct MainWindow: View {
         .onChange(of: model.receipt) { receipt in
             if receipt?.isSuccess == true { celebrationTrigger += 1 }
         }
+    }
+
+    private var memoryStatus: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("App memory · checked every 30 seconds").font(.callout.weight(.semibold))
+            if let error = model.memoryScanError {
+                Text(error).foregroundStyle(.orange)
+            }
+            if let snapshot = model.memorySnapshot {
+                Text("Disk used as extra memory: \(String(format: "%.1f GB", Double(snapshot.swapUsedMB) / 1024))")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(snapshot.apps.prefix(3)) { app in
+                    HStack {
+                        Text(app.app)
+                        Spacer()
+                        Text("\(app.memoryText) · \(app.processCount) processes")
+                    }.font(.caption)
+                }
+            } else if model.memoryScanError == nil {
+                Text("Checking whole apps and their background tools…").font(.caption)
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var analyticsChoice: some View {

@@ -12,6 +12,15 @@
 > It needs macOS 13 or later and no admin password, Full Disk Access, or
 > Accessibility access. The open-source CLI remains available below.
 
+The local app also checks whole-app memory every 30 seconds. It adds up the
+app and its background tools, including compressed memory. Large memory use,
+rapid growth, or a growing helper crowd can trigger a read-only warning for
+ChatGPT/Codex, Claude Code, and other apps. The warning asks you to save work
+and review unused tabs or restart the owning app; it never kills a live coding
+session. Notifications must be enabled in Machogs and allowed by macOS. A
+warning identifies resource use, not proof of a leak. This monitor is in the
+native app; the CLI's existing process report is unchanged.
+
 ```
 $ machogs
 

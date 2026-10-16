@@ -46,6 +46,10 @@ struct BustView: View {
             header.joyReveal(appeared, delay: 0)
             if let receipt {
                 receiptCard(receipt)
+            } else if event?.kind == .memory {
+                Text("This is a memory warning, not proof of a leak. Your coding sessions stay open. Save your work before restarting an app.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Button("Got it") { dismiss() }
             } else if targets.isEmpty {
                 allClear.joyReveal(appeared, delay: 0.05)
             } else {
