@@ -84,6 +84,17 @@ final class MemoryMonitorTests: XCTestCase {
         XCTAssertNil(policy.evaluateMemory(snapshot("ChatGPT", mb: 32000, count: 200)))
     }
 
+    func testArchitectureMarkedProcessIDsStillContributeMemory() {
+        let apps = MemoryMonitor.rollup(
+            metrics: "PID MEM CMPRS COMMAND\n10* 500M 20M Widget\n",
+            processes: "10 1 /Applications/Widget.app/Contents/MacOS/Widget\n")
+        XCTAssertEqual(apps.count, 1)
+        XCTAssertEqual(apps.first?.app, "Widget")
+        XCTAssertEqual(apps.first?.memoryMB, 500)
+        XCTAssertEqual(apps.first?.compressedMB, 20)
+        XCTAssertEqual(apps.first?.processCount, 1)
+    }
+
     func testNativeSamplerReadsRealAppMemory() async throws {
         let sample = try await MemoryMonitor.sample()
         XCTAssertGreaterThan(sample.physicalMB, 0)
