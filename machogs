@@ -290,6 +290,7 @@ why_line() {
     1b) echo "It is stuck in a loop. Nothing is waiting for it." ;;
     2)  echo "The app that started it is gone, but it never stopped." ;;
     2b) echo "A duplicate. One app started the same helper many times over." ;;
+    2c) echo "A tool started for a chat you have not touched in over an hour." ;;
     3)  echo "A hidden browser window nobody is looking at." ;;
     4)  echo "The app was closed, but this piece of it stayed behind." ;;
     *)  echo "" ;;
@@ -488,8 +489,48 @@ codex_app_pids() {
 }
 AGENT_SAFE=" $(codex_app_pids | tr '\n' ' ') "
 
+# Codex (alone or inside ChatGPT) starts one set of tool helpers per chat and
+# never stops them, so a busy day leaves hundreds idle under one app-server.
+# A set starts in the same second as its chat's transcript file, and that file
+# says when the chat last moved. Idle sets of chats that have been still for
+# STALE_CHAT_MINS are the stale workers. Anything that does not match a chat
+# exactly, is busy, or has children stays protected.
+STALE_CHAT_MINS=${STALE_CHAT_MINS:-60}
+stale_chat_tools() {
+  local servers chats kids starts
+  servers=$(pgrep -f '/codex .*app-server' 2>/dev/null | tr '\n' ' ')
+  [ -n "${servers// }" ] || return 0
+  chats=$(find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -mtime -30 2>/dev/null | while read -r f; do
+    b=${f##*/rollout-}
+    t=$(date -j -f '%Y-%m-%dT%H-%M-%S' "${b:0:19}" +%s 2>/dev/null) || continue
+    echo "chat $t $(stat -f %m "$f")"
+  done)
+  [ -n "$chats" ] || return 0
+  kids=$(ps -axo pid=,ppid=,pcpu=,lstart= | awk -v s=" $servers " 'index(s, " " $2 " ")')
+  starts=$(echo "$kids" | awk '{print $4, $5, $6, $7, $8}' | sort -u | while read -r l; do
+    echo "start $(date -j -f '%a %b %d %T %Y' "$l" +%s 2>/dev/null) $l"
+  done)
+  { echo "$chats"; echo "$starts"; ps -axo ppid= | awk '{print "parent", $1}'; echo "$kids" | sed 's/^/kid /'; } |
+    awk -v now="$(date +%s)" -v mins="$STALE_CHAT_MINS" '
+      $1=="chat"   { born[$2]=$3; next }
+      $1=="start"  { epoch[$3" "$4" "$5" "$6" "$7]=$2; next }
+      $1=="parent" { parent[$2]=1; next }
+      $1=="kid" {
+        pid=$2; if ($4+0 > 2 || (pid in parent)) next
+        t=epoch[$5" "$6" "$7" "$8" "$9]; if (t == "") next
+        for (d=-2; d<=2; d++) if ((t+d) in born) {
+          if (now - born[t+d] >= mins*60) print pid
+          break
+        }
+      }' | tr '\n' ' '
+}
+STALE_TOOLS=" $(stale_chat_tools) "
+
 protected() {
   local pid=$1 a
+  # A tool set left behind by a chat that went still is not live work, even
+  # though its parent (Codex inside ChatGPT) is a running coding app.
+  case "$STALE_TOOLS" in *" $pid "*) return 1 ;; esac
   # protected if the process itself, OR any of its ancestors, is our own
   # session or a running coding app / CLI. This is the net that stops us
   # reaping the MCP servers belonging to sessions you're actively coding in.
@@ -1063,6 +1104,7 @@ flush_kills() {
     # not only when the detector first queued the process.
     CLAUDE_SAFE=" $(claude_app_pids | tr '\n' ' ') "
     AGENT_SAFE=" $(codex_app_pids | tr '\n' ' ') "
+    STALE_TOOLS=" $(stale_chat_tools) "
     if protected "$pid"; then
       echo "    ${DIM}skip${NC} $pid ${DIM}(became protected before close)${NC}"
       continue
@@ -1254,6 +1296,7 @@ while IFS=$'\t' read -r gp sig; do
   newest=$(echo "$pids" | tail -1)          # highest pid = most recent, keep it
   for pid in $pids; do
     [ "$pid" = "$newest" ] && continue
+    case "$STALE_TOOLS" in *" $pid "*) continue ;; esac   # 2c closes these
     alive "$pid" || continue
     ci=$(cpu_of "$pid"); ci=${ci%.*}
     kids=$(pgrep -P "$pid" 2>/dev/null | wc -l | tr -d ' ')
@@ -1277,6 +1320,18 @@ while IFS=$'\t' read -r gp sig; do
     fi
   done
 done < <(echo "$TBL" | awk -F'\t' 'NF{print $1"\t"$2}' | sort -u)
+[ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
+flush_kills
+
+# ---- 2c. tools left running by chats that went still -----------------------
+hdr "2c. Tools from old chats  ${DIM}(chat still for ${STALE_CHAT_MINS}+ min)${NC}"
+found_any=0
+for pid in $STALE_TOOLS; do
+  alive "$pid" || continue
+  found_any=1
+  owner=$(comm_of "$(root_of "$pid")" | short)
+  queue "$pid" "tool from an old chat under ${owner:-Codex}"
+done
 [ $found_any -eq 0 ] && echo "  ${GRN}none${NC}"
 flush_kills
 
