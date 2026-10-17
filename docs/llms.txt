@@ -8,9 +8,9 @@
 
 ## Install the native Mac app
 
-Download Machogs 1.4.2:
+Download Machogs 1.4.3:
 
-    https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg
+    https://github.com/bnishit/machogs/releases/download/v1.4.3/Machogs-1.4.3.dmg
 
 Open the DMG and drag Machogs to Applications. The app supports Apple silicon
 and Intel. Its first scan is read-only. One-tap Close actions re-verify every target
@@ -118,7 +118,7 @@ findings are not counted unless `--dupes` is present. Always read `findings`.
 
 ## Native app status
 
-Machogs 1.4.2 is the public native app release. Its Developer ID-signed
+Machogs 1.4.3 is the public native app release. Its Developer ID-signed
 universal DMG is linked above. The app has a normal window,
 menu-bar Hogs, Storage and Ports views, Receipts, and Settings. Verified native
 behavior: manual process and port actions re-verify targets before acting;
@@ -126,7 +126,7 @@ actions use stable process identities and an execution-time recheck;
 stale targets never expand to other findings. The app targets macOS 13 or later
 and does not require an admin password, Full Disk Access, or Accessibility
 access. Optional usage analytics are off until the user opts in. They record
-first opted-in use and weekly foreground use in released builds, never scan contents or file paths. The pending native-analytics update instead needs a fresh choice for feature counts and action outcomes; the self-hosted receiver stores connection IPs for 90 days.
+first opted-in use and weekly foreground use in released builds, never scan contents or file paths. The native-analytics update needs a fresh choice for feature counts and action outcomes; the self-hosted receiver stores connection IPs for 90 days.
 See https://bnishit.github.io/machogs/privacy.html.
 
 Automatic cleanup is off by default. With explicit user opt-in, the native app

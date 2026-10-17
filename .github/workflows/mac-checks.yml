@@ -15,6 +15,7 @@ jobs:
         run: |
           bash -n machogs
           python3 -m unittest discover -s tests
+          node --test tests/test_website_analytics.mjs
           plutil -lint app/PrivacyInfo.xcprivacy
       - name: Test Mac core
         run: swift test --package-path app

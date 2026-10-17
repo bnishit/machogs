@@ -2,7 +2,7 @@
 
 **Finds the hog. Names the app. Leaves live sessions alone.**
 
-**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.3/Machogs-1.4.3.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 ## The Mac app
 
@@ -14,7 +14,7 @@ is opt-in and limited to disconnected abandoned helpers.
 
 **New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
 every feature, or change your choice later in **Settings → Privacy**.
-[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.2) ·
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.3) ·
 [Privacy details](https://bnishit.github.io/machogs/privacy.html)
 
 The app needs macOS 13 or later. No admin password, Full Disk Access, or
@@ -189,7 +189,7 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ## Install the Mac app
 
-[Download Machogs 1.4.2](https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg), open the DMG, and drag Machogs to Applications.
+[Download Machogs 1.4.3](https://github.com/bnishit/machogs/releases/download/v1.4.3/Machogs-1.4.3.dmg), open the DMG, and drag Machogs to Applications.
 
 The app is signed with Developer ID, notarized by Apple, and includes both
 Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
@@ -205,7 +205,7 @@ command arguments, scan contents, messages or cleanup receipts.
 |---|---|---|
 | App: Settings → Privacy → Share feature usage | App opens, onboarding, bounded feature scan counts and manual action outcomes, version and random install ID | Self-hosted Native Analytics |
 | CLI: explicitly set `MACHOGS_ANALYTICS=1` | Command category and success/failure, random install ID | Self-hosted Native Analytics |
-| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | PostHog |
+| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | Self-hosted Native Analytics |
 
 The native receiver stores the connection IP; native events expire after 90 days.
 App sharing requires a fresh choice when upgrading from the older basic usage
