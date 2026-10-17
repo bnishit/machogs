@@ -135,7 +135,6 @@ struct MainWindow: View {
                         Text(app.app)
                         Spacer()
                         Text("\(app.memoryText) · \(app.processCount) processes")
-                        QuitAppButton(name: app.app)
                     }.font(.caption)
                 }
             } else if model.memoryScanError == nil {
@@ -213,35 +212,6 @@ private struct SidebarSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(router.page == page ? .isSelected : [])
-            }
-        }
-    }
-}
-
-/// Quits a whole app the way Cmd-Q does, so it can ask to save first. If it
-/// is still running a few seconds later, the button turns into Force Quit.
-/// Shows nothing for names that are not a running app (Claude Code and
-/// Codex CLI rows are sessions, which Machogs never closes) or for itself.
-struct QuitAppButton: View {
-    let name: String
-    @State private var askedAt: Date?
-
-    private var running: NSRunningApplication? {
-        NSWorkspace.shared.runningApplications.first {
-            $0.bundleURL?.deletingPathExtension().lastPathComponent == name
-                && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
-        }
-    }
-
-    var body: some View {
-        if let app = running {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let stuck = askedAt.map { context.date.timeIntervalSince($0) > 5 } ?? false
-                Button(stuck ? "Force quit" : askedAt == nil ? "Quit" : "Quitting…") {
-                    if stuck { app.forceTerminate() } else { app.terminate(); askedAt = .now }
-                }
-                .disabled(askedAt != nil && !stuck)
-                .help(stuck ? "\(name) did not quit. Force quit loses unsaved work." : "Quit \(name), like Cmd-Q. It can ask you to save first.")
             }
         }
     }

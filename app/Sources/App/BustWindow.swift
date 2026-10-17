@@ -49,13 +49,7 @@ struct BustView: View {
             } else if event?.kind == .memory {
                 Text("This is a memory warning, not proof of a leak. Your coding sessions stay open. Save your work before restarting an app.")
                     .font(.callout).foregroundStyle(.secondary)
-                HStack {
-                    Button("Got it") { dismiss() }
-                    Spacer()
-                    if let name = event?.groupID.split(separator: "|", maxSplits: 1).last {
-                        QuitAppButton(name: String(name))
-                    }
-                }
+                Button("Got it") { dismiss() }
             } else if targets.isEmpty {
                 allClear.joyReveal(appeared, delay: 0.05)
             } else {
