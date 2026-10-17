@@ -90,7 +90,7 @@ public enum MemoryMonitor {
         var totals: [String: (memory: Int, compressed: Int, count: Int)] = [:]
         for line in metrics.split(separator: "\n") {
             let parts = line.split(maxSplits: 3, whereSeparator: \.isWhitespace)
-            guard parts.count == 4, let pid = Int(parts[0]), let app = owner(pid) else { continue }
+            guard parts.count == 4, let pid = Int(parts[0].trimmingCharacters(in: CharacterSet(charactersIn: "*"))), let app = owner(pid) else { continue }
             var total = totals[app] ?? (0, 0, 0)
             total.memory += megabytes(parts[1])
             total.compressed += megabytes(parts[2])
