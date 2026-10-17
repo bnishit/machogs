@@ -5,14 +5,12 @@ import SwiftUI
 import UserNotifications
 
 enum AppPage: String, CaseIterable, Identifiable {
-    case now, memory, energy, ports, storage, receipts, settings
+    case now, ports, storage, receipts, settings
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .now: return "Overview"
-        case .memory: return "Memory"
-        case .energy: return "Battery"
         case .ports: return "Ports"
         case .storage: return "Storage"
         case .receipts: return "Receipts"
@@ -23,8 +21,6 @@ enum AppPage: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .now: return "gauge.with.needle"
-        case .memory: return "memorychip"
-        case .energy: return "battery.25"
         case .ports: return "cable.connector"
         case .storage: return "internaldrive"
         case .receipts: return "doc.text"
@@ -42,13 +38,18 @@ struct MainWindow: View {
     @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var router: AppRouter
+    @Environment(\.openWindow) private var openWindow
     @State private var celebrationTrigger = 0
     @State private var appeared = false
 
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 18) {
-                SidebarSection(title: "MAC", pages: [.now, .memory, .energy, .storage], router: router, badge: badge)
+                HStack(spacing: 9) {
+                    PigMascot(mood: .curious, size: 32)
+                    Text("machogs").font(.system(size: 21, weight: .bold, design: .rounded))
+                }.padding(.vertical, 10)
+                SidebarSection(title: "MAC", pages: [.now, .storage], router: router, badge: badge)
                     .joyReveal(appeared, delay: 0)
                 SidebarSection(title: "TOOLS", pages: [.ports], router: router, badge: badge)
                     .joyReveal(appeared, delay: 0.05)
@@ -56,18 +57,20 @@ struct MainWindow: View {
                     .joyReveal(appeared, delay: 0.1)
                 Spacer()
                 VStack(spacing: 5) {
-                    PigMascot(mood: .pleased, size: 44)
-                    Text("Apps leave messes. The pig finds them.")
-                        .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                    Image(systemName: "lock.shield").font(.title3).foregroundStyle(.secondary)
+                    Text(Bundle.main.bundleIdentifier == "com.bnishit.machogs.design" ? "Design preview · Local build" : "Your work stays yours.")
+                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .joyReveal(appeared, delay: 0.15)
             }
             .padding(12)
-            .background(.ultraThinMaterial)
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
         } detail: {
             VStack(spacing: 0) {
+                if settings.needsAnalyticsChoice {
+                    analyticsChoice.padding(.horizontal, 18).padding(.top, 14)
+                }
                 if let receipt = model.receipt {
                     if receipt.isSuccess {
                         SuccessReceipt(
@@ -84,11 +87,15 @@ struct MainWindow: View {
                             .padding(.top, 14)
                     }
                 }
+                if router.page == .now {
+                    memoryStatus.padding(.horizontal, 18).padding(.top, 12)
+                }
                 page
             }
             .navigationTitle(router.page.title)
         }
-        .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
+        .tint(MachogsPalette.rose)
+        .frame(minWidth: 820, idealWidth: 980, minHeight: 600, idealHeight: 740)
         .overlay { ConfettiBurst(trigger: celebrationTrigger) }
         .sheet(item: reviewBinding) { review in
             ReviewSheet(review: review, model: model)
@@ -98,7 +105,7 @@ struct MainWindow: View {
             appeared = true
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow, window.contentView?.frame.width ?? 0 < 820 else { return }
-                window.setContentSize(NSSize(width: 900, height: 680))
+                window.setContentSize(NSSize(width: 980, height: 740))
                 window.center()
             }
         }
@@ -107,16 +114,60 @@ struct MainWindow: View {
         }
     }
 
+    private var memoryStatus: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("App memory · checked every 30 seconds").font(.callout.weight(.semibold))
+            if let event = model.watchdogEvent, event.kind == .memory {
+                HStack {
+                    Text(event.title).font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                    Spacer()
+                    Button("Review memory warning") { openWindow(id: "bust") }
+                }
+            }
+            if let error = model.memoryScanError {
+                Text(error).foregroundStyle(.orange)
+            }
+            if let snapshot = model.memorySnapshot {
+                Text("Disk used as extra memory: \(String(format: "%.1f GB", Double(snapshot.swapUsedMB) / 1024))")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(snapshot.apps.prefix(3)) { app in
+                    HStack {
+                        Text(app.app)
+                        Spacer()
+                        Text("\(app.memoryText) · \(app.processCount) processes")
+                    }.font(.caption)
+                }
+            } else if model.memoryScanError == nil {
+                Text("Checking whole apps and their background tools…").font(.caption)
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var analyticsChoice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Help improve MacHogs? It’s optional.").font(.callout.weight(.semibold))
+            Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Link("Privacy details", destination: AppSettings.privacyURL).font(.caption)
+                Spacer()
+                Button("No thanks") { settings.setAnalyticsEnabled(false) }
+                Button("Enable feature usage") { settings.setAnalyticsEnabled(true) }
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
     @ViewBuilder
     private var page: some View {
         switch router.page {
         case .now: NowPage(model: model)
-        case .memory: MemoryPage(model: model)
-        case .energy: EnergyPage(model: model)
         case .ports: PortsPage(model: model)
         case .storage: StoragePage(model: model)
         case .receipts: ReceiptsPage(model: model, openNow: { router.page = .now })
-        case .settings: SettingsPage(settings: settings)
+        case .settings: SettingsPage(settings: settings, model: model)
         }
     }
 
@@ -127,8 +178,6 @@ struct MainWindow: View {
     private func badge(for page: AppPage) -> Int {
         switch page {
         case .now: return model.groups.reduce(0) { $0 + $1.count }
-        case .memory: return model.memoryReport?.hoardingApps.count ?? 0
-        case .energy: return model.energyReport?.drainingApps.count ?? 0
         case .ports: return model.portsReport?.ports.filter(\.isClosable).count ?? 0
         case .storage: return model.diskReport?.items.filter { $0.verdict == "safe" }.count ?? 0
         default: return 0
@@ -168,162 +217,6 @@ private struct SidebarSection: View {
     }
 }
 
-struct NowPage: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Your Mac, right now").font(.largeTitle.bold())
-                StatusHero(model: model)
-                if model.hasSwapPressure { memoryWarning }
-                findings
-                if let report = model.report {
-                    DisclosureGroup("Mac details") { vitals(report.host).padding(.top, 10) }
-                        .font(.callout.weight(.semibold)).padding(.horizontal, 4)
-                }
-            }
-            .padding(20)
-        }
-        .overlay { if model.isScanning && model.report == nil { ProgressView("Checking what your apps left behind…") } }
-    }
-
-    private var findings: some View {
-        GroupBox {
-            if model.groups.isEmpty {
-                EmptyState(
-                    symbol: "checkmark.seal",
-                    title: model.report == nil ? "No fresh scan yet" : "Nothing is hogging your Mac",
-                    detail: model.report == nil
-                        ? "Machogs needs a successful read-only scan before it can give an answer."
-                        : "No stuck or abandoned programs are running. If the Mac still feels slow, the cause is elsewhere."
-                )
-            } else {
-                VStack(spacing: 0) {
-                    if model.groups.count > 1 {
-                        HStack {
-                            Text("\(model.groups.reduce(0) { $0 + $1.count }) items can be closed")
-                                .font(.callout).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Close \(model.groups.reduce(0) { $0 + $1.count }) unused things 💥") {
-                                Task { await model.closeEverythingNow() }
-                            }
-                            .disabled(model.isStale || model.isActing)
-                        }
-                        .padding(.bottom, 10)
-                    }
-                    ForEach(Array(model.groups.enumerated()), id: \.element.id) { index, group in
-                        if index > 0 { Divider() }
-                        FindingRow(group: group, disabled: model.isStale || model.isActing) {
-                            Task { await model.closeGroupNow(group) }
-                        }
-                    }
-                }
-            }
-        } label: {
-            Label("What apps left behind", systemImage: "waveform.path.ecg")
-                .font(.headline)
-        }
-    }
-
-    private func vitals(_ host: HostSnapshot) -> some View {
-        HStack(spacing: 12) {
-            MetricCard(title: "Work level", value: String(format: "%.1f", host.load), detail: "across \(host.cores) CPU cores", symbol: "cpu")
-            MetricCard(title: "Disk-backed memory", value: "\(host.swapPercent)%", detail: "of backup memory in use", symbol: "memorychip")
-            MetricCard(title: "Time since restart", value: "\(host.uptimeDays)d", detail: "days", symbol: "clock")
-        }
-    }
-
-    private var memoryWarning: some View {
-        GroupBox {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title2).foregroundStyle(.orange).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Restart recommended").font(.headline)
-                    Text("Your Mac has been running for \(model.report?.host.uptimeDays ?? 0) days and is using slower disk space as backup memory. Save your work, then choose Apple menu › Restart. Cleaning the items below will not fix this.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-}
-
-struct StatusHero: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                PigMascot(mood: mascotMood, size: 66)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(.system(size: 29, weight: .bold, design: .rounded))
-                    Text(detail).foregroundStyle(.secondary)
-                    if let date = model.lastSuccessfulScan {
-                        Text("Last checked \(date.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .accessibilityElement(children: .combine)
-            Spacer()
-            Button { Task { await model.scan() } } label: {
-                if model.isScanning {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Check again", systemImage: "arrow.clockwise")
-                }
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(model.isScanning)
-        }
-        .padding(18)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [color.opacity(0.16), Color.pink.opacity(0.035)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: color.opacity(0.09), radius: 18, y: 8)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(color.opacity(0.18)))
-    }
-
-    private var title: String {
-        if model.scanError != nil { return model.isStale ? "Last result is stale" : "Machogs could not check" }
-        if model.isStale { return "These results are old" }
-        if let first = model.groups.first {
-            let owner = first.owner.isEmpty ? "An app" : first.owner
-            return first.isHot ? "\(owner) is keeping your Mac busy" : "\(owner) left \(first.count) thing\(first.count == 1 ? "" : "s") running"
-        }
-        if model.report != nil { return "No hogs hiding here" }
-        return "Checking what your apps left behind"
-    }
-
-    private var detail: String {
-        if model.isStale { return "The last check is still shown, but actions are paused until Machogs can check again." }
-        if let error = model.scanError { return "Nothing changed. Try again. \(error)" }
-        if model.hasHotFinding { return "It is working hard enough to cause heat or fan noise. You can close it after one final safety check." }
-        if !model.groups.isEmpty { return "It is idle. It can use memory, but it is not heating your Mac." }
-        return model.report == nil ? "This check is read-only. Nothing can close." : "Nothing stuck or abandoned needs your attention."
-    }
-
-    private var color: Color {
-        if model.scanError != nil { return .orange }
-        if model.hasHotFinding { return .red }
-        return model.groups.isEmpty ? .green : .orange
-    }
-
-    private var mascotMood: PigMood {
-        if model.scanError != nil || model.hasHotFinding { return .concerned }
-        if model.isScanning || model.report == nil { return .sniffing }
-        return model.groups.isEmpty ? .pleased : .curious
-    }
-}
-
 struct FindingRow: View {
     let group: FindingGroup
     let disabled: Bool
@@ -346,7 +239,7 @@ struct FindingRow: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Button("Close \(group.count) 💥", action: review)
+            Button("Review \(group.count)", action: review)
                 .disabled(disabled)
         }
         .padding(.vertical, 12)
@@ -401,7 +294,7 @@ struct PortSection: View {
                             }
                             Spacer()
                             if item.isClosable {
-                                Button("Free port \(item.port) 💥") { Task { await model.closePortNow(item) } }
+                                Button("Review port \(item.port)") { Task { await model.requestPortReview(item) } }
                                     .disabled(model.isActing)
                             } else {
                                 Label(item.protected ? "Active work — protected" : "Managed by macOS", systemImage: "lock.shield")
@@ -422,263 +315,13 @@ struct PortSection: View {
     }
 }
 
-struct MemoryPage: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PageIntro(title: "Who is holding your memory", detail: "Every app with all of its background pieces added up, the way the Force Quit dialog counts. Cold memory has been pushed out to disk because nothing touches it — an app doing real work stays warm.")
-                if let error = model.memoryError { ErrorCard(message: error, retry: { Task { await model.loadMemory() } }) }
-                if let report = model.memoryReport {
-                    pressureCard(report.host)
-                    GroupBox {
-                        VStack(spacing: 0) {
-                            ForEach(Array(report.apps.enumerated()), id: \.element.id) { index, app in
-                                if index > 0 { Divider() }
-                                MemoryAppRow(app: app)
-                            }
-                            if report.apps.isEmpty {
-                                EmptyState(symbol: "memorychip", title: "Could not read memory sizes", detail: "Nothing was measured on this run. Try again.")
-                            }
-                        }
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text("Apps, heaviest first").font(.headline)
-                            Text("Machogs closes nothing on this screen. To get the memory back, quit the app itself.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                } else {
-                    ProgressView("Adding up your apps…").frame(maxWidth: .infinity).padding(40)
-                }
-            }
-            .padding(20)
-        }
-        .task { if model.memoryReport == nil { await model.loadMemory() } }
-    }
-
-    // A hog is a curiosity at 20% swap and an emergency at 92% — the same
-    // numbers deserve different urgency, so the pressure context leads.
-    private func pressureCard(_ host: HostSnapshot) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("\(host.swapPercent)% of backup memory in use").font(.title2.bold())
-                    Spacer()
-                    Button { Task { await model.loadMemory() } } label: {
-                        if model.isLoadingMemory { ProgressView().controlSize(.small) }
-                        else { Label("Check again", systemImage: "arrow.clockwise") }
-                    }
-                    .disabled(model.isLoadingMemory)
-                }
-                DiskGauge(pct: host.swapPercent)
-                Text(host.swapPercent > 80
-                     ? "Your Mac is out of fast memory and is shuffling to disk. What is listed below is why it feels slow."
-                     : "There is still room. This list is worth a look, not a worry.")
-                    .font(.caption).foregroundStyle(host.swapPercent > 80 ? .orange : .secondary)
-            }.padding(4)
-        }
-    }
-}
-
-struct MemoryAppRow: View {
-    let app: MemoryApp
-    @State private var expanded = false
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(spacing: 0) {
-                ForEach(app.processes) { proc in
-                    HStack(spacing: 12) {
-                        Text(proc.memoryText).font(.callout.monospacedDigit().weight(.medium))
-                            .frame(width: 78, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(proc.name).font(.callout)
-                            Text("pid \(String(proc.pid)) • \(mbTextCold(proc)) cold • running \(proc.age)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 5).padding(.leading, 8)
-                }
-                if app.processCount > app.processes.count {
-                    Text("…and \(app.processCount - app.processes.count) smaller pieces")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 5).padding(.leading, 8)
-                }
-            }
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 12) {
-                Text(app.memoryText).font(.headline.monospacedDigit())
-                    .frame(width: 86, alignment: .trailing)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(app.app).font(.body.weight(.medium))
-                        if app.isHoarding {
-                            Label("Hoarding", systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
-                                .accessibilityLabel("This app is hoarding memory")
-                        }
-                    }
-                    Text(rowDetail).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var rowDetail: String {
-        var parts = ["\(app.coldPercent)% cold", "\(app.processCount) process\(app.processCount == 1 ? "" : "es")", "oldest running \(app.oldestAge)"]
-        if app.isHoarding, let big = app.biggestProcess {
-            parts.append("biggest piece: \(big.name) at \(big.memoryText)")
-        }
-        return parts.joined(separator: " • ")
-    }
-
-    private func mbTextCold(_ proc: MemoryProcess) -> String {
-        proc.memoryMB > 0 ? "\(min(100, proc.compressedMB * 100 / proc.memoryMB))%" : "0%"
-    }
-}
-
-struct EnergyPage: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PageIntro(title: "Where your battery is going", detail: "Every app with all of its background pieces added up, and what each one costs you in minutes of battery an hour. Your screen and the Mac itself take the rest.")
-                if let error = model.energyError { ErrorCard(message: error, retry: { Task { await model.loadEnergy() } }) }
-                if let report = model.energyReport {
-                    powerCard(report)
-                    GroupBox {
-                        VStack(spacing: 0) {
-                            ForEach(Array(report.appsWorthNaming.enumerated()), id: \.element.id) { index, app in
-                                if index > 0 { Divider() }
-                                EnergyAppRow(app: app)
-                            }
-                            if report.appsWorthNaming.isEmpty {
-                                EmptyState(symbol: "battery.100.bolt", title: "Nothing is worth naming", detail: "No app is using enough power right now to cost you a minute of battery an hour.")
-                            }
-                        }
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text("Apps, costliest first").font(.headline)
-                            Text("Machogs closes nothing on this screen. The app eating your battery is often the one you are using — quitting it is your call, not the pig's.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("These are estimates. Machogs takes what your Mac is drawing right now and splits it between apps by how hard each one is working, so trust the ranking more than the exact minute.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                } else {
-                    ProgressView("Measuring what your Mac is drawing…").frame(maxWidth: .infinity).padding(40)
-                }
-            }
-            .padding(20)
-        }
-        .task { if model.energyReport == nil { await model.loadEnergy() } }
-    }
-
-    // The same cost means two different things depending on whether the wall
-    // is paying, so the power state leads and the headline is phrased from it.
-    private func powerCard(_ report: EnergyReport) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(report.power.summary).font(.title3.bold())
-                    Spacer()
-                    Button { Task { await model.loadEnergy() } } label: {
-                        if model.isLoadingEnergy { ProgressView().controlSize(.small) }
-                        else { Label("Check again", systemImage: "arrow.clockwise") }
-                    }
-                    .disabled(model.isLoadingEnergy)
-                }
-                if let worst = report.worstApp {
-                    Text("\(worst.app) is the biggest drain on your Mac right now.")
-                        .font(.body.weight(.medium))
-                    Text(report.costSentence(for: worst)).font(.callout).foregroundStyle(.secondary)
-                }
-                Text(report.power.onBattery
-                     ? "Your Mac is pulling \(report.power.wattsText) right now."
-                     : "Working this hard, your Mac would be pulling \(report.power.wattsText).")
-                    .font(.caption).foregroundStyle(.tertiary)
-            }.padding(4)
-        }
-    }
-}
-
-struct EnergyAppRow: View {
-    let app: EnergyApp
-    @State private var expanded = false
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(spacing: 0) {
-                ForEach(app.processes) { proc in
-                    HStack(spacing: 12) {
-                        Text(proc.drainText).font(.caption.monospacedDigit().weight(.medium))
-                            .frame(width: 130, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(proc.name).font(.callout)
-                            Text("pid \(String(proc.pid)) • running \(proc.age)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 5).padding(.leading, 8)
-                }
-                if app.processCount > app.processes.count {
-                    Text("…and \(app.processCount - app.processes.count) smaller pieces")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 5).padding(.leading, 8)
-                }
-            }
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 12) {
-                Text(app.drainText).font(.callout.monospacedDigit().weight(.semibold))
-                    .frame(width: 140, alignment: .trailing)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(app.app).font(.body.weight(.medium))
-                        if app.isDraining {
-                            Label("Draining you", systemImage: "battery.25")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
-                                .accessibilityLabel("This app has been draining your battery for hours")
-                        }
-                    }
-                    Text(rowDetail).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var rowDetail: String {
-        var parts = ["\(app.processCount) process\(app.processCount == 1 ? "" : "es")", "open \(app.oldestAge)"]
-        if app.isDraining, let big = app.biggestProcess {
-            parts.append("hardest worker: \(big.name) at \(big.drainText)")
-        }
-        return parts.joined(separator: " • ")
-    }
-}
-
 struct StoragePage: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                PageIntro(title: "Make room safely", detail: "Machogs checks common caches and large folders. It never offers to delete personal files.")
+                PageIntro(title: "Make room safely", detail: "MacHogs checks common caches and large folders. It never offers to delete personal files.")
                 if let error = model.diskError { ErrorCard(message: error, retry: { Task { await model.loadDisk() } }) }
                 if let report = model.diskReport {
                     GroupBox {
@@ -777,7 +420,7 @@ struct ReceiptsPage: View {
             VStack(alignment: .leading, spacing: 16) {
                 PageIntro(title: "Your receipts", detail: sinceText)
                 if history.isEmpty {
-                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After Machogs closes something you approve, the score starts here.")
+                    EmptyState(symbol: "doc.text", title: "No receipts yet", detail: "After MacHogs closes something, the score starts here.")
                     Button("Check my Mac", action: openNow)
                 } else {
                     heroRow.joyReveal(appeared, delay: 0.02)
@@ -797,7 +440,7 @@ struct ReceiptsPage: View {
 
     private var sinceText: String {
         guard let since = history.map(\.date).min() else {
-            return "A receipt appears only after Machogs successfully closes something you approved."
+            return "A receipt appears only after MacHogs confirms a process closed, manually or automatically."
         }
         return "What your Mac was doing behind your back · since \(since.formatted(.dateTime.day().month()))"
     }
@@ -959,18 +602,18 @@ struct AppScore: Identifiable {
 }
 
 struct SettingsPage: View {
+    @ObservedObject var model: AppModel
     @ObservedObject var settings: AppSettings
     @State private var shoulderTaps: Bool
     @State private var startAtLogin: Bool
     @State private var soundOn: Bool
-    @State private var anonymousUsage: Bool
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, model: AppModel) {
+        self.model = model
         self.settings = settings
         _shoulderTaps = State(initialValue: settings.shoulderTaps)
         _startAtLogin = State(initialValue: settings.startAtLogin)
         _soundOn = State(initialValue: settings.soundOn)
-        _anonymousUsage = State(initialValue: settings.anonymousUsage)
     }
 
     var body: some View {
@@ -978,12 +621,16 @@ struct SettingsPage: View {
             Section("Background") {
                 Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
-                Text("Alerts open Machogs. They never close anything.").font(.caption).foregroundStyle(.secondary)
+                Text("Alerts open MacHogs for review.").font(.caption).foregroundStyle(.secondary)
                 notificationRow
-                Toggle("Open Machogs at login", isOn: $startAtLogin)
+                Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
+                Toggle("Automatically clean confirmed abandoned helpers", isOn: $model.automaticCleanupEnabled)
+                Text("Only disconnected automation helpers, abandoned for five minutes. Live sessions, connected helpers and uncertain cases stay open. Off by default.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(model.automaticCleanupStatus).font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Toggle("Play sounds", isOn: $soundOn)
                         .onChange(of: soundOn, perform: settings.setSound)
@@ -993,15 +640,21 @@ struct SettingsPage: View {
                 }
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
             }
-            Section("Usage analytics") {
-                Toggle("Share anonymous feature usage", isOn: $anonymousUsage)
-                    .onChange(of: anonymousUsage, perform: settings.setAnonymousUsage)
-                Text("Off by default. Shares feature names, success/failure, counts, app version and an anonymous install ID with self-hosted Native Analytics. The server sees your IP. No process names, paths, commands or scan contents. Events are kept for 90 days. Turning this off stops future collection and resets this install ID.")
+            Section("Privacy") {
+                Toggle("Share feature usage", isOn: Binding(
+                    get: { settings.shareBasicUsage }, set: settings.setAnalyticsEnabled
+                ))
+                .disabled(!settings.analyticsAvailable)
+                Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
+                Text(settings.analyticsAvailable
+                     ? "Off by default. You can turn this off at any time."
+                     : "Usage sharing is unavailable in this build.")
                     .font(.caption).foregroundStyle(.secondary)
+                Link("Privacy details", destination: AppSettings.privacyURL)
             }
             Section("Safety") {
-                PromiseRow("Checks are read-only.")
-                PromiseRow("Before anything closes, you see it and the engine checks it again.")
+                PromiseRow("Checks are read-only unless automatic cleanup is enabled.")
+                PromiseRow("Automatic cleanup only closes confirmed abandoned helpers. Other cleanup needs your review. Every close is checked again.")
                 PromiseRow("Live coding sessions and macOS stay protected.")
                 PromiseRow("Personal files never get a delete button.")
             }
@@ -1027,7 +680,7 @@ struct SettingsPage: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "bell.slash.fill").foregroundStyle(.orange).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("macOS is blocking Machogs alerts").font(.callout.weight(.semibold))
+                    Text("macOS is blocking MacHogs alerts").font(.callout.weight(.semibold))
                     Text("You said no to notifications once, so shoulder taps never reach you. Allow them in System Settings to get them back.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

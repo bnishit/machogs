@@ -47,7 +47,7 @@ public struct ActionReview: Identifiable, Equatable, Sendable {
     public var body: String {
         switch kind {
         case .processes:
-            return "Machogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected."
+            return "MacHogs checked them again just now. Only the items summarized below will close. If one holds unsaved work, that work could be lost. Live coding sessions and macOS are protected."
         case .port(let item):
             let location = item.cwd.isEmpty ? "" : " in \(item.cwd)"
             return "Machogs checked the listener again. This will stop \(item.process)\(location). Unsaved work inside it can be lost. macOS services and live coding sessions stay protected."
@@ -86,22 +86,33 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var diskError: String?
     @Published public private(set) var isLoadingDisk = false
     @Published public private(set) var lastSuccessfulDiskScan: Date?
-    @Published public private(set) var memoryReport: MemoryReport?
-    @Published public private(set) var memoryError: String?
-    @Published public private(set) var isLoadingMemory = false
-    @Published public private(set) var lastSuccessfulMemoryScan: Date?
-    @Published public private(set) var energyReport: EnergyReport?
-    @Published public private(set) var energyError: String?
-    @Published public private(set) var isLoadingEnergy = false
-    @Published public private(set) var lastSuccessfulEnergyScan: Date?
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
+    @Published public var automaticCleanupEnabled: Bool {
+        didSet {
+            defaults.set(automaticCleanupEnabled, forKey: "automaticAbandonedCleanup")
+            abandonedSince.removeAll()
+        }
+    }
+    @Published public private(set) var automaticCleanupStatus = "No automatic cleanup yet."
+    private let defaults: UserDefaults
+    private var abandonedSince: [ProcessTarget: Date] = [:]
+    private var lastAbandonedCheck: Date?
+
+    private let analytics: UsageAnalytics?
     private let service: any MachogsServing
+    @Published public private(set) var memorySnapshot: MemorySnapshot?
+    @Published public private(set) var memoryScanError: String?
+
+    private var memoryPollingTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var watchdog = WatchdogPolicy()
 
-    public init(service: any MachogsServing) {
+    public init(service: any MachogsServing, defaults: UserDefaults = .standard, analytics: UsageAnalytics? = nil) {
+        self.analytics = analytics
         self.service = service
+        self.defaults = defaults
+        automaticCleanupEnabled = defaults.bool(forKey: "automaticAbandonedCleanup")
     }
 
     public var groups: [FindingGroup] { report?.groups ?? [] }
@@ -111,6 +122,12 @@ public final class AppModel: ObservableObject {
 
     public func startPolling() {
         guard pollingTask == nil else { return }
+        memoryPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.sampleMemory()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
         pollingTask = Task { [weak self] in
             await self?.scan()
             while !Task.isCancelled {
@@ -124,17 +141,65 @@ public final class AppModel: ObservableObject {
     public func scan() async {
         guard !isScanning else { return }
         isScanning = true
-        scanError = nil
         defer { isScanning = false }
         do {
             let fresh = try await service.scan()
             report = fresh
+            scanError = nil
             lastSuccessfulScan = Date()
-            watchdogEvent = watchdog.evaluate(fresh)
-            UsageAnalytics.shared.track("scan.completed", feature: .process, count: fresh.groups.count)
+            if let event = watchdog.evaluate(fresh) { watchdogEvent = event }
+            analytics?.track("scan.completed", feature: .process, count: fresh.groups.count)
+            await cleanAbandonedHelpers()
         } catch {
+            abandonedSince.removeAll()
+            lastAbandonedCheck = nil
             scanError = error.localizedDescription
-            UsageAnalytics.shared.track("scan.completed", feature: .process, outcome: .failure)
+            analytics?.track("scan.completed", feature: .process, outcome: .failure)
+        }
+    }
+
+    public func cleanAbandonedHelpers(now: Date = Date()) async {
+        guard automaticCleanupEnabled, !isActing, !isReviewing, pendingReview == nil else {
+            abandonedSince.removeAll()
+            return
+        }
+        do {
+            let fresh = try await service.scanAbandoned()
+            guard automaticCleanupEnabled else { abandonedSince.removeAll(); return }
+            if let last = lastAbandonedCheck, now.timeIntervalSince(last) > 120 || now < last {
+                abandonedSince.removeAll()
+            }
+            lastAbandonedCheck = now
+            let candidates = Set(fresh.actionableFindings.filter { $0.section == "2" && $0.action == .reapable }
+                .map { ProcessTarget(pid: $0.pid, identity: $0.identity) })
+            // A missed/failed poll restarts the five-minute observation window.
+            abandonedSince = abandonedSince.filter { candidates.contains($0.key) && now.timeIntervalSince($0.value) >= 0 }
+            for target in candidates where abandonedSince[target] == nil { abandonedSince[target] = now }
+            let ready = candidates.filter { now.timeIntervalSince(abandonedSince[$0]!) >= 300 }
+            guard !ready.isEmpty, !isActing, !isReviewing, pendingReview == nil else { return }
+            isActing = true
+            defer { isActing = false }
+            let result = try await service.closeAbandoned(targets: Array(ready))
+            for target in ready { abandonedSince.removeValue(forKey: target) }
+            let closed = result.killedFindings.count
+            automaticCleanupStatus = closed > 0
+                ? "Automatically closed \(closed) abandoned helper\(closed == 1 ? "" : "s"). Live sessions were left alone."
+                : "Rechecked abandoned helpers. Nothing confirmed closed."
+        } catch {
+            abandonedSince.removeAll()
+            automaticCleanupStatus = "Automatic cleanup check failed. Nothing else was closed."
+        }
+    }
+
+    public func sampleMemory() async {
+        do {
+            let fresh = try await service.inspectMemory()
+            memorySnapshot = fresh
+            memoryScanError = nil
+            analytics?.track("scan.completed", feature: .memory)
+            if let event = watchdog.evaluateMemory(fresh) { watchdogEvent = event }
+        } catch {
+            memoryScanError = "Memory check failed. The last reading may be old."
         }
     }
 
@@ -146,7 +211,7 @@ public final class AppModel: ObservableObject {
         do {
             portsReport = try await service.inspectPorts()
             lastSuccessfulPortsScan = Date()
-            UsageAnalytics.shared.track("scan.completed", feature: .ports)
+            analytics?.track("scan.completed", feature: .ports)
         }
         catch { portsError = error.localizedDescription }
     }
@@ -159,35 +224,9 @@ public final class AppModel: ObservableObject {
         do {
             diskReport = try await service.inspectDisk()
             lastSuccessfulDiskScan = Date()
-            UsageAnalytics.shared.track("scan.completed", feature: .disk)
+            analytics?.track("scan.completed", feature: .disk)
         }
         catch { diskError = error.localizedDescription }
-    }
-
-    public func loadMemory() async {
-        guard !isLoadingMemory else { return }
-        isLoadingMemory = true
-        memoryError = nil
-        defer { isLoadingMemory = false }
-        do {
-            memoryReport = try await service.inspectMemory()
-            lastSuccessfulMemoryScan = Date()
-            UsageAnalytics.shared.track("scan.completed", feature: .memory)
-        }
-        catch { memoryError = error.localizedDescription }
-    }
-
-    public func loadEnergy() async {
-        guard !isLoadingEnergy else { return }
-        isLoadingEnergy = true
-        energyError = nil
-        defer { isLoadingEnergy = false }
-        do {
-            energyReport = try await service.inspectEnergy()
-            lastSuccessfulEnergyScan = Date()
-            UsageAnalytics.shared.track("scan.completed", feature: .energy)
-        }
-        catch { energyError = error.localizedDescription }
     }
 
     public func requestProcessReview(_ groups: [FindingGroup]) async {
@@ -330,6 +369,12 @@ public final class AppModel: ObservableObject {
         guard let review = pendingReview, !isActing else { return }
         isActing = true
         defer { isActing = false }
+        let feature: UsageAnalytics.Feature
+        switch review.kind {
+        case .processes: feature = .process
+        case .port: feature = .ports
+        case .disk: feature = .disk
+        }
         do {
             switch review.kind {
             case .processes(let findings):
@@ -364,14 +409,15 @@ public final class AppModel: ObservableObject {
                                          isSuccess: result.freedMB > 0, canShare: false, kind: .disk)
                 Task { await loadDisk() }
             }
+            analytics?.track("action.completed", feature: feature, outcome: receipt?.isSuccess == true ? .success : .failure, count: receipt?.closedCount ?? 0)
         } catch {
+            analytics?.track("action.completed", feature: feature, outcome: .failure)
             switch review.kind {
             case .processes: scanError = error.localizedDescription
             case .port: portsError = error.localizedDescription
             case .disk: diskError = error.localizedDescription
             }
         }
-        UsageAnalytics.shared.track("action.completed", outcome: receipt?.isSuccess == true ? .success : .failure, count: receipt?.closedCount ?? 0)
         pendingReview = nil
     }
 
@@ -398,11 +444,8 @@ public final class AppModel: ObservableObject {
         if protected > 0 { parts.append("\(protected) became protected and was left alone.") }
         if failed > 0 { parts.append("\(failed) could not be closed.") }
         if parts.isEmpty { parts.append("Already gone. Nothing to close.") }
-        let memory = killed.reduce(0) { $0 + $1.memoryMB }
         if cpu >= 20 {
             parts.append("Freed about \(String(format: "%.1f", cpu / 100)) of a CPU core.")
-        } else if memory >= 100 {
-            parts.append("Got back \(mbText(memory)) of memory.")
         } else if !killed.isEmpty {
             parts.append("They were wasting memory, not heating your Mac.")
         }

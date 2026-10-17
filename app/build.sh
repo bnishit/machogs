@@ -13,15 +13,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 cd "$ROOT"
 
-# Full Xcode is required for a reproducible app build. Prefer the selected
-# toolchain, but use the standard Xcode install without changing global state.
-if ! xcodebuild -version >/dev/null 2>&1; then
-    if [ -d /Applications/Xcode.app/Contents/Developer ]; then
-        export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-    else
-        echo "Full Xcode is required. Install it and select its developer directory." >&2
-        exit 1
-    fi
+# The command-line tools can build the app with their matching macOS SDK.
+# Do not switch to a different, possibly unconfigured Xcode installation.
+if ! xcrun --find swift >/dev/null 2>&1 || ! xcrun --sdk macosx --show-sdk-path >/dev/null 2>&1; then
+    echo "Swift and the macOS SDK are required. Install the Xcode command-line tools." >&2
+    exit 1
 fi
 
 IDENTITY="${1:--}"
@@ -29,24 +25,12 @@ ARCHS="${MACHOGS_ARCHS:-$(uname -m)}"
 VERSION="${MACHOGS_VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)}"
 BUILD_NUMBER="${MACHOGS_BUILD_NUMBER:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Info.plist)}"
 CHANNEL="${MACHOGS_CHANNEL:-production}"
-
 case "$CHANNEL" in
-    production)
-        APP_NAME="Machogs"
-        BUNDLE_ID="com.bnishit.machogs"
-        URL_SCHEME="machogs"
-        ;;
-    dev)
-        APP_NAME="Machogs Dev"
-        BUNDLE_ID="com.bnishit.machogs.dev"
-        URL_SCHEME="machogs-dev"
-        ;;
-    *)
-        echo "Channel must be production or dev: $CHANNEL" >&2
-        exit 2
-        ;;
+    production) APP_NAME="Machogs"; BUNDLE_ID="com.bnishit.machogs"; URL_SCHEME="machogs" ;;
+    dev) APP_NAME="Machogs Dev"; BUNDLE_ID="com.bnishit.machogs.dev"; URL_SCHEME="machogs-dev" ;;
+    design) APP_NAME="Machogs Design"; BUNDLE_ID="com.bnishit.machogs.design"; URL_SCHEME="machogs-design" ;;
+    *) echo "Channel must be production, dev, or design: $CHANNEL" >&2; exit 2 ;;
 esac
-
 APP="$ROOT/dist/$APP_NAME.app"
 
 case "$VERSION" in
@@ -76,10 +60,10 @@ cp Info.plist "$APP/Contents/"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLName $BUNDLE_ID" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 $URL_SCHEME" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 cp ../machogs "$APP/Contents/Resources/machogs"
 cp PrivacyInfo.xcprivacy "$APP/Contents/Resources/"
 chmod +x "$APP/Contents/Resources/machogs"

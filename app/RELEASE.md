@@ -95,23 +95,27 @@ download. Publishing is deliberately outside these scripts.
 
 ## Privacy disclosure
 
-Machogs sends no usage data by default. An optional Settings switch sends a fixed-schema set of feature/outcome counts, app version and a random install ID to self-hosted Native Analytics. The server receives the connection IP. Events are kept for 90 days. Turning the switch off stops future tracking and resets the install ID; it does not erase already collected events. No process names, file paths, command arguments, scan contents or crash reports are sent. No third-party analytics SDK is used. It reads the current user's running processes, ports, memory,
-selected disk-usage locations, and its own local receipt log to explain the
-Mac's state. It stores settings and watchdog cooldowns in macOS preferences and
-writes close receipts to `~/Library/Logs/machogs.log`.
+The updated app replaces PostHog with an optional fixed-schema native relay.
+Sharing starts off and needs a fresh choice in Settings → Privacy, including for
+people who allowed the previous basic usage measurement. App opens, onboarding,
+bounded feature scan counts and manual action outcomes carry version and a random
+install ID. Background scans are feature use, not active-user evidence.
 
-The app can close a user-approved process, free a user-approved port, clear only
-an engine-approved rebuildable cache, or request a restart. It never performs
-those actions merely because it scanned. Notifications and Start at Login are
-optional macOS features the user can turn off.
+The receiver stores connection IPs and retains events for 90 days. Process names,
+paths, arguments, scan contents and cleanup receipts are excluded. Opt-out cancels
+pending sends and removes the ID; delivery is best-effort without offline retry.
+The website keeps its separate PostHog choice. The CLI sends only with explicit
+MACHOGS_ANALYTICS=1; the bundled engine always disables that separate channel.
 
-`PrivacyInfo.xcprivacy` records no cross-app advertising tracking; optional usage and device identifiers are disclosed. It declares
-the approved `CA92.1` reason for the app's own UserDefaults reads and writes.
-Review the manifest again if Apple changes the contract or a dependency is added.
+Keep docs/privacy.html and docs/analytics.md aligned before release. The privacy
+manifest declares identifiers, product interaction and other data (connection IP),
+with no cross-app tracking and UserDefaults reason CA92.1. The release verifier
+still requires universal binaries, Developer ID, hardened runtime, timestamp,
+notarization and Gatekeeper. No provider token belongs in the native bundle.
 
 ## GitHub automation boundary
 
-The repository has no checked-in GitHub Actions release workflow. Before adding
+The Mac checks workflow tests and builds a development app; it does not publish a release. The repository has no checked-in GitHub Actions release workflow. Before adding
 one, first restore GitHub CLI access and inspect branch protection, Actions
 permissions, environments, and existing secrets. The first public release
 should use the local, witnessed flow above. Automate it only after one complete
@@ -126,8 +130,8 @@ merging responsibilities, not by choosing one whole file over the other:
 
 - Keep the product UX first-launch and Settings screens, including their final
   user-facing privacy and release-status copy.
-- Keep one privacy manifest. Its contract is no tracking, no collected data,
-  no tracking domains, and UserDefaults reason `CA92.1`.
+- Keep one privacy manifest. Its contract is optional usage analytics, no
+  cross-app tracking, no tracking domains, and UserDefaults reason `CA92.1`.
 - Keep this branch's build structure: full-Xcode preflight, per-architecture
   builds, `lipo` universal assembly, version and build-number injection,
   privacy-manifest copy, hardened runtime, secure timestamp for Developer ID,

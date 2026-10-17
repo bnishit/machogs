@@ -9,7 +9,7 @@ struct MenuBarIcon: View {
         ZStack(alignment: .topTrailing) {
             Text(model.watchdogEvent != nil ? "📸" : "🐷")
                 .font(.system(size: 13)).frame(width: 18, height: 18)
-            if model.scanError != nil || model.hasHotFinding {
+            if model.scanError != nil || model.memoryScanError != nil || model.hasHotFinding {
                 Circle()
                     .fill(model.hasHotFinding ? Color.red : Color.orange)
                     .frame(width: 6, height: 6)
@@ -22,7 +22,7 @@ struct MenuBarIcon: View {
     }
 
     private var label: String {
-        if model.scanError != nil { return "Machogs needs attention" }
+        if model.scanError != nil || model.memoryScanError != nil { return "Machogs needs attention" }
         if model.watchdogEvent != nil { return "Machogs caught something" }
         if model.hasHotFinding { return "Machogs found hot background work" }
         if !model.groups.isEmpty { return "Machogs found unused background work" }
@@ -45,7 +45,6 @@ struct MenuBarView: View {
     @State private var portQuery = ""
     @State private var appeared = false
     @State private var confettiTrigger = 0
-    @State private var closingID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,7 +85,8 @@ struct MenuBarView: View {
             Divider()
             footer.padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .frame(width: 380)
+        .frame(width: 396)
+        .tint(MachogsPalette.rose)
         .overlay(ConfettiBurst(trigger: confettiTrigger))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: workspace)
         .onAppear {
@@ -100,16 +100,13 @@ struct MenuBarView: View {
         .onChange(of: model.receipt) { receipt in
             if let receipt, receipt.closedCount > 0 { confettiTrigger += 1 }
         }
-        .onChange(of: model.isActing) { acting in
-            if !acting { closingID = nil }
-        }
     }
 
     private var header: some View {
         HStack(spacing: 9) {
             PigMascot(mood: mascotMood, size: 44)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Machogs").font(.headline)
+                Text("machogs").font(.system(size: 19, weight: .bold, design: .rounded))
                 Text(headerDetail).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -135,63 +132,71 @@ struct MenuBarView: View {
             Button { openMain(.now) } label: {
                 Label("Finish setup", systemImage: "sparkles")
             }
-            .buttonStyle(PigActionStyle(tint: .pink))
+            .buttonStyle(PigActionStyle(tint: MachogsPalette.rose))
             .keyboardShortcut(.defaultAction)
         }
         .padding(.vertical, 28)
     }
 
-    @ViewBuilder private var hogsView: some View {
-        if let error = model.scanError, model.report == nil {
-            MenuState(symbol: "exclamationmark.triangle", title: "The pig lost the scent", detail: error) {
-                Task { await model.scan() }
+    private var hogsView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            let status = model.scanPresentation
+            if status.state == .checking || status.state == .initial {
+                MenuLoading(title: status.title, detail: status.detail)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(status.title).font(.system(size: 21, weight: .semibold, design: .rounded))
+                    Text(status.detail).font(.callout).foregroundStyle(.secondary)
+                }.padding(.vertical, 6)
             }
-        } else if model.report == nil || model.isScanning && model.groups.isEmpty {
-            MenuLoading(title: "Checking who forgot to clock out…", detail: "Looking only. Nothing will close.")
-        } else if model.groups.isEmpty {
-            MenuState(symbol: "checkmark.circle", title: "All quiet 🐷",
-                      detail: "Your Mac is working only for you.")
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if model.isStale { staleMessage("Couldn’t refresh. Closing is paused until a fresh check succeeds.") }
-                if settings.notificationsDenied { notificationsDeniedRow }
-                if model.hasSwapPressure { swapCard }
-                ForEach(Array(rankedGroups.prefix(4).enumerated()), id: \.element.id) { index, group in
-                    CulpritCard(
-                        group: group,
-                        crowned: index == 0 && group.isHot,
-                        isClosing: closingID == group.id && model.isActing,
-                        disabled: model.isStale || model.isActing,
-                        close: {
-                            closingID = group.id
-                            Task { await model.closeGroupNow(group) }
-                        },
-                        leaveIt: { model.snoozeGroup(group.id) }
-                    )
-                    .hoverLift()
+            if let event = model.watchdogEvent, event.kind == .memory {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(event.title).font(.callout.weight(.semibold))
+                    Text(event.body).font(.caption).foregroundStyle(.secondary)
+                    Button("Show memory use") { openMain(.now) }
                 }
-                if rankedGroups.count > 4 {
-                    Button("View \(rankedGroups.count - 4) more groups in Machogs") { openMain(.now) }
-                        .buttonStyle(.link)
-                }
-                if rankedGroups.count >= 2 {
-                    Button {
-                        closingID = "ALL"
-                        Task { await model.closeEverythingNow() }
-                    } label: {
-                        if closingID == "ALL" && model.isActing {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                Text("Closing…")
-                            }.frame(maxWidth: .infinity)
-                        } else {
-                            Text("Close everything 🧹").frame(maxWidth: .infinity)
-                        }
+                .padding(10).background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
+            if let error = model.memoryScanError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+            if settings.notificationsDenied { notificationsDeniedRow }
+            if model.hasSwapPressure && !model.isStale { swapCard }
+            ForEach(Array(rankedGroups.prefix(4).enumerated()), id: \.element.id) { index, group in
+                CulpritCard(
+                    group: group,
+                    crowned: index == 0 && group.isHot,
+                    isReviewing: model.isReviewing,
+                    disabled: model.isStale || model.isScanning || model.isActing || model.isReviewing,
+                    close: {
+                        openMain(.now)
+                        Task { await model.requestProcessReview([group]) }
+                    },
+                    leaveIt: { model.snoozeGroup(group.id) }
+                )
+            }
+            if status.protectedCount > 0 {
+                Button { openMain(.now) } label: {
+                    HStack {
+                        Label("\(status.protectedCount) protected · Left alone", systemImage: "lock.shield")
+                        Spacer()
+                        Image(systemName: "arrow.up.right").font(.caption2)
                     }
-                    .buttonStyle(PigActionStyle(tint: .pink))
-                    .disabled(model.isStale || model.isActing)
-                    .accessibilityLabel("Close everything Machogs found")
+                    .font(.caption.weight(.medium))
+                    .padding(12)
+                    .background(MachogsPalette.calm.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }.buttonStyle(.plain)
+            }
+            if rankedGroups.count > 4 {
+                Button("View all \(rankedGroups.count) groups") { openMain(.now) }.buttonStyle(.link)
+            }
+            if rankedGroups.count >= 2 {
+                Button("Review all \(status.actionableCount) items") {
+                    openMain(.now)
+                    Task { await model.requestProcessReview(model.groups) }
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isStale || model.isScanning || model.isActing || model.isReviewing)
             }
         }
     }
@@ -303,7 +308,8 @@ struct MenuBarView: View {
                     ForEach(items.prefix(6)) { item in
                         Divider()
                         MenuPortRow(item: item, disabled: model.isActing) {
-                            Task { await model.closePortNow(item) }
+                            openMain(.ports)
+                            Task { await model.requestPortReview(item) }
                         }
                     }
                 }
@@ -403,14 +409,7 @@ struct MenuBarView: View {
     }
     private var headerDetail: String {
         switch workspace {
-        case .hogs:
-            if model.hasSwapPressure { return "A restart is the honest next step" }
-            if let top = rankedGroups.first {
-                if top.isHot { return "\(top.owner) is making your Mac work hard" }
-                let count = model.groups.reduce(0) { $0 + $1.count }
-                return "\(top.owner) and friends left \(count) thing\(count == 1 ? "" : "s") running"
-            }
-            return model.report == nil ? "Checking what apps left behind…" : "All quiet. Working only for you."
+        case .hogs: return "A little less background noise."
         case .storage: return "Safe cache, measured on demand"
         case .ports: return "Who is using your local ports"
         }
@@ -440,7 +439,7 @@ struct MenuBarView: View {
         }
     }
     private var mascotMood: PigMood {
-        if model.scanError != nil || model.hasHotFinding { return .concerned }
+        if model.scanError != nil || model.hasHotFinding || model.hasSwapPressure || model.scanPresentation.protectedIsBusy { return .concerned }
         if isRefreshing { return .sniffing }
         return model.groups.isEmpty ? .pleased : .curious
     }
@@ -449,7 +448,7 @@ struct MenuBarView: View {
 private struct CulpritCard: View {
     let group: FindingGroup
     let crowned: Bool
-    let isClosing: Bool
+    let isReviewing: Bool
     let disabled: Bool
     let close: () -> Void
     let leaveIt: () -> Void
@@ -472,18 +471,18 @@ private struct CulpritCard: View {
             Text(group.story).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             HStack(spacing: 10) {
                 Button(action: close) {
-                    if isClosing {
+                    if isReviewing {
                         HStack(spacing: 5) {
                             ProgressView().controlSize(.mini)
-                            Text("Closing…")
+                            Text("Checking…")
                         }
                     } else {
-                        Text("Close it 💥")
+                        Text("Review")
                     }
                 }
-                .buttonStyle(PigActionStyle(tint: .pink))
+                .buttonStyle(PigActionStyle(tint: MachogsPalette.rose))
                 .disabled(disabled)
-                .accessibilityLabel("Close \(group.count) items left by \(group.owner)")
+                .accessibilityLabel("Review \(group.count) items left by \(group.owner)")
                 Button("Leave it", action: leaveIt)
                     .buttonStyle(.link).font(.caption)
                     .accessibilityLabel("Leave \(group.owner) alone for an hour")
@@ -563,9 +562,9 @@ private struct MenuPortRow: View {
             Spacer()
             if item.isClosable {
                 Button(action: review) {
-                    Label("Free 💥", systemImage: "bolt.fill")
+                    Label("Review", systemImage: "magnifyingglass")
                 }
-                    .buttonStyle(PigActionStyle(tint: .pink))
+                    .buttonStyle(PigActionStyle(tint: MachogsPalette.rose))
                     .disabled(disabled)
                     .help("Open a fresh safety review in Machogs")
                     .accessibilityLabel("Review freeing port \(item.port) from \(item.process) in Machogs")

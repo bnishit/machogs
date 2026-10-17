@@ -9,7 +9,8 @@ enum MachogsBuild {
     }
 
     static var urlScheme: String {
-        Bundle.main.bundleIdentifier == "com.bnishit.machogs.dev" ? "machogs-dev" : "machogs"
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
+        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "machogs"
     }
 }
 
@@ -22,10 +23,22 @@ struct MachogsApp: App {
     private let watchdogNotifier: WatchdogNotifier
 
     init() {
-        UsageAnalytics.shared.track("app.opened")
         let service: any MachogsServing = MachogsClient()
-        let model = AppModel(service: service)
         let settings = AppSettings()
+        let model = AppModel(service: service, analytics: settings.analytics)
+        // A design launch opens the real overview without onboarding prompts.
+        // These are in-memory choices in the isolated design app only.
+        if Bundle.main.bundleIdentifier == "com.bnishit.machogs.design",
+           ProcessInfo.processInfo.arguments.contains("--design-preview") {
+            settings.onboardingComplete = true
+            settings.shoulderTaps = false
+            settings.soundOn = false
+            if ProcessInfo.processInfo.arguments.contains("--design-light") {
+                NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            } else if ProcessInfo.processInfo.arguments.contains("--design-dark") {
+                NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            }
+        }
         _model = StateObject(wrappedValue: model)
         _settings = StateObject(wrappedValue: settings)
         successSound = SuccessSoundCoordinator(model: model, settings: settings)
@@ -47,7 +60,13 @@ struct MachogsApp: App {
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
                 if settings.onboardingComplete { model.startPolling() }
-                Task { await settings.refreshNotificationStatus() }
+                Task {
+                    await settings.refreshNotificationStatus()
+                    await settings.recordForegroundUse()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                Task { await settings.recordForegroundUse() }
             }
             .onDisappear { NSApp.setActivationPolicy(.accessory) }
             .onChange(of: settings.onboardingComplete) { complete in
@@ -63,6 +82,7 @@ struct MachogsApp: App {
         .handlesExternalEvents(matching: ["bust"])
         MenuBarExtra {
             MenuBarView(model: model, settings: settings, router: router)
+                .onAppear { Task { await settings.recordForegroundUse() } }
         } label: {
             MenuBarIcon(model: model)
                 // The label lives as long as the app: the one safe place to
@@ -85,12 +105,7 @@ struct MachogsApp: App {
                 guard parts.count == 2, let pid = Int(parts[0]) else { return nil }
                 return ProcessTarget(pid: pid, identity: parts[1])
             } ?? []
-        if url.host == "close" {
-            // "Close it 💥" straight from the notification. The engine
-            // re-verifies every target before anything closes.
-            if !targets.isEmpty { Task { await model.closeTargetsNow(targets) } }
-            return
-        }
+        // External links may request a review, never authorize a close.
         router.page = AppPage(rawValue: url.host ?? "") ?? .now
         NSApp.activate(ignoringOtherApps: true)
         if !targets.isEmpty { Task { await model.requestProcessTargets(targets) } }

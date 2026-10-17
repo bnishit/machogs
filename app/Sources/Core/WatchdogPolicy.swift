@@ -14,12 +14,9 @@ public struct WatchdogPolicy: Sendable {
     private var primed = false
     private var previousHot: Set<String> = []
     private var notifiedHot: Set<String> = []
-    private var notifiedMemory: Set<String> = []
-    // The count each group had when its last clone notification went out.
-    // A plain edge trigger ("crossed 8") fired once and then watched a swarm
-    // grow 8 -> 49 in silence, because 49 never crosses 8 again. Growth since
-    // the last notification is what re-arms it.
     private var notifiedCloneCounts: [String: Int] = [:]
+    private var memoryBaselines: [String: (app: AppMemory, swap: Int, at: Date)] = [:]
+    private var memoryNotices: [String: (app: AppMemory, critical: Bool)] = [:]
     private var previousSessions: Set<String> = []
     private var previousGroupKeys: Set<String> = []
     private var lastNotified: [String: Date] = [:]
@@ -48,19 +45,8 @@ public struct WatchdogPolicy: Sendable {
         return event
     }
 
-    /// A clone group is worth another tap when it has doubled, or grown by
-    /// another army's worth, since the last tap. Both bounds matter: doubling
-    /// alone goes quiet on huge swarms (98 -> 195 before the next word),
-    /// stepping alone nags on churny mid-size ones.
-    private func cloneWorthNotifying(_ count: Int, lastNotifiedAt: Int) -> Bool {
-        guard count >= 8 else { return false }
-        guard lastNotifiedAt > 0 else { return true }
-        return count >= lastNotifiedAt * 2 || count >= lastNotifiedAt + 8
-    }
-
     public mutating func evaluate(_ report: EngineReport) -> WatchdogEvent? {
         let groups = report.groups
-        let memory = report.memoryGroups
         let hot = Set(groups.filter { $0.totalCPU >= 60 }.map(\.id))
         let counts = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.count) })
         let sessions = Set(report.findings.filter { $0.action == .neverKilled }.map { $0.identity })
@@ -68,9 +54,6 @@ public struct WatchdogPolicy: Sendable {
         defer {
             previousHot = hot
             notifiedHot.formIntersection(hot)
-            notifiedMemory.formIntersection(Set(memory.map(\.id)))
-            // Forget a group that is gone or has shrunk back under an army:
-            // if it grows past 8 again later, that is a fresh event.
             notifiedCloneCounts = notifiedCloneCounts.filter { (counts[$0.key] ?? 0) >= 8 }
             previousSessions = sessions
             previousGroupKeys = keys
@@ -94,26 +77,58 @@ public struct WatchdogPolicy: Sendable {
         }
 
         if let group = groups.first(where: {
-            cloneWorthNotifying($0.count, lastNotifiedAt: notifiedCloneCounts[$0.id] ?? 0) && canNotify($0.id)
+            $0.count >= 8 && ($0.count >= (notifiedCloneCounts[$0.id] ?? 0) + 8
+                || $0.count >= (notifiedCloneCounts[$0.id] ?? 0) * 2) && canNotify($0.id)
         }) {
             notifiedCloneCounts[group.id] = group.count
             return emit(WatchdogEvent(kind: .clones, title: "Clone army in the background",
                                       body: group.story, targets: group.targets, groupID: group.id), groupID: group.id)
         }
-
-        // Memory hogs. A gigabyte parked idle deserves a tap only when the Mac
-        // is actually feeling it: with swap climbing, hoarded memory is what
-        // the person's real work is being pushed to disk to make room for. On
-        // an unpressured machine only a truly huge hog is worth interrupting
-        // anyone over.
-        let memoryFloorMB = report.host.swapPercent >= 60 ? 1024 : 4096
-        if let group = memory.first(where: {
-            $0.totalMemoryMB >= memoryFloorMB && !notifiedMemory.contains($0.id) && canNotify($0.id)
-        }) {
-            notifiedMemory.insert(group.id)
-            return emit(WatchdogEvent(kind: .memory, title: "Found what's eating your memory",
-                                      body: group.story, targets: group.targets, groupID: group.id), groupID: group.id)
-        }
         return nil
     }
+
+    public mutating func evaluateMemory(_ snapshot: MemorySnapshot) -> WatchdogEvent? {
+        guard snapshot.physicalMB > 0 else { return nil }
+        let time = now()
+        let names = Set(snapshot.apps.map(\.app))
+        memoryBaselines = memoryBaselines.filter { names.contains($0.key) }
+        memoryNotices = memoryNotices.filter { names.contains($0.key) }
+        var result: WatchdogEvent?
+        for app in snapshot.apps {
+            let id = "memory|\(app.app)"
+            let baseline = memoryBaselines[app.app]
+            if baseline == nil || time.timeIntervalSince(baseline!.at) > 600 {
+                memoryBaselines[app.app] = (app, snapshot.swapUsedMB, time)
+            }
+            let critical = app.memoryMB >= snapshot.physicalMB / 2
+            let pressure = snapshot.swapUsedMB >= snapshot.physicalMB / 4
+            let large = app.memoryMB >= snapshot.physicalMB / 4
+            let cold = app.compressedMB >= app.memoryMB / 2
+            let memoryGrowth = baseline.map { app.memoryMB - $0.app.memoryMB } ?? 0
+            let processGrowth = baseline.map { app.processCount - $0.app.processCount } ?? 0
+            let recent = baseline.map { time.timeIntervalSince($0.at) <= 600 } ?? false
+            let growing = recent && (memoryGrowth >= 1024
+                || (memoryGrowth >= 512 && processGrowth >= 8)
+                || (processGrowth >= 16 && app.processCount >= 32 && memoryGrowth >= 256))
+            guard critical || (large && (pressure || cold)) || growing else {
+                if app.memoryMB < snapshot.physicalMB / 8 { memoryNotices.removeValue(forKey: app.app) }
+                continue
+            }
+            let previous = memoryNotices[app.app]
+            let worsened = previous.map { (critical && !$0.critical) || app.memoryMB >= $0.app.memoryMB + 1024
+                || (app.processCount >= $0.app.processCount + 16 && app.memoryMB >= $0.app.memoryMB + 256) } ?? true
+            let snoozed = (snoozedUntil[id] ?? .distantPast) > time
+            let elapsed = time.timeIntervalSince(lastNotified[id] ?? .distantPast)
+            guard result == nil, !snoozed, previous == nil || worsened || elapsed >= cooldown,
+                  lastNotified[id] == nil || elapsed >= (worsened ? 60 : cooldown) else { continue }
+            let growth = growing ? " Up \(String(format: "%.1f", Double(memoryGrowth) / 1024)) GB and \(max(0, processGrowth)) processes since an earlier check." : ""
+            let body = "\(app.app) is using \(app.memoryText) across \(app.processCount) processes.\(growth) Save your work, then close unused tabs or restart the app when ready."
+            memoryNotices[app.app] = (app, critical)
+            result = emit(WatchdogEvent(kind: .memory,
+                title: critical ? "\(app.app) is using at least half your RAM" : "\(app.app)'s memory use needs a look",
+                body: body, targets: [], groupID: id), groupID: id)
+        }
+        return result
+    }
+
 }

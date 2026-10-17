@@ -2,6 +2,9 @@ import Foundation
 
 public protocol MachogsServing: Sendable {
     func scan() async throws -> EngineReport
+    func scanAbandoned() async throws -> EngineReport
+    func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport
+    func inspectMemory() async throws -> MemorySnapshot
     func planClose(targets: [ProcessTarget]) async throws -> EngineReport
     func closeReviewed(targets: [ProcessTarget]) async throws -> EngineReport
     func inspectPorts() async throws -> PortsReport
@@ -9,9 +12,13 @@ public protocol MachogsServing: Sendable {
     func closePort(_ target: PortTarget) async throws -> PortsReport
     func inspectDisk() async throws -> DiskReport
     func clearDisk(path: String) async throws -> DiskClearResult
-    func inspectMemory() async throws -> MemoryReport
-    func inspectEnergy() async throws -> EnergyReport
     func shareCard() async throws -> String
+}
+
+public extension MachogsServing {
+    func scanAbandoned() async throws -> EngineReport { throw MachogsClientError.invalidResponse }
+    func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport { throw MachogsClientError.invalidResponse }
+    func inspectMemory() async throws -> MemorySnapshot { throw MachogsClientError.invalidResponse }
 }
 
 public enum MachogsClientError: LocalizedError, Equatable {
@@ -68,6 +75,19 @@ public struct MachogsClient: MachogsServing {
         ["kill", "--json", "--sessions", "--dupes"] + targetArguments(targets)
     }
 
+    public func inspectMemory() async throws -> MemorySnapshot {
+        try await MemoryMonitor.sample()
+    }
+
+    public func scanAbandoned() async throws -> EngineReport {
+        try await decode(["--json", "--abandoned-only"], as: EngineReport.self)
+    }
+
+    public func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport {
+        guard !Self.targetArguments(targets).isEmpty else { throw MachogsClientError.invalidResponse }
+        return try await decode(["kill", "--json", "--abandoned-only"] + Self.targetArguments(targets), as: EngineReport.self)
+    }
+
     public func scan() async throws -> EngineReport {
         try await decode(["--json", "--sessions"], as: EngineReport.self)
     }
@@ -105,14 +125,6 @@ public struct MachogsClient: MachogsServing {
         try await decode(["disk", "--json"], as: DiskReport.self)
     }
 
-    public func inspectMemory() async throws -> MemoryReport {
-        try await decode(["memory", "--json"], as: MemoryReport.self)
-    }
-
-    public func inspectEnergy() async throws -> EnergyReport {
-        try await decode(["energy", "--json"], as: EnergyReport.self)
-    }
-
     public func clearDisk(path: String) async throws -> DiskClearResult {
         guard path.hasPrefix("/") else { throw MachogsClientError.invalidResponse }
         return try await decode(["disk", "clear", path, "--json"], as: DiskClearResult.self)
@@ -141,6 +153,7 @@ public struct MachogsClient: MachogsServing {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/bash")
             process.arguments = [scriptURL.path] + arguments
+            process.environment = ProcessInfo.processInfo.environment.merging(["MACHOGS_ANALYTICS": "0"]) { _, new in new }
 
             let output = Pipe()
             let errors = Pipe()

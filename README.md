@@ -1,16 +1,44 @@
 # machogs 🐷
 
-**Finds the hog. Names the app. Closes nothing without you.**
+**Finds the hog. Names the app. Leaves live sessions alone.**
 
-**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
-> [!IMPORTANT]
-> The native Mac app is available as a signed and notarized universal download.
-> It includes a normal window, menu-bar Hogs, Storage and Ports views, Receipts,
-> and Settings. Every action has a named review, stable identity check, and a
-> fresh protection check; menu-bar and notification actions only open Review.
-> It needs macOS 13 or later and no admin password, Full Disk Access, or
-> Accessibility access. The open-source CLI remains available below.
+## The Mac app
+
+Machogs is a free, signed and Apple-notarized Mac app. Start with
+**Overview** for a plain-English finding, a count of protected work left alone,
+and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
+when you need them. Manual cleanup stays under your control. Automatic cleanup
+is opt-in and limited to disconnected abandoned helpers.
+
+**New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
+every feature, or change your choice later in **Settings → Privacy**.
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.2) ·
+[Privacy details](https://bnishit.github.io/machogs/privacy.html)
+
+The app needs macOS 13 or later. No admin password, Full Disk Access, or
+Accessibility access is required. Prefer Terminal? [Install the CLI](#install-the-cli).
+
+The local app also checks whole-app memory every 30 seconds. It adds up the
+app and its background tools, including compressed memory. Large memory use,
+rapid growth, or a growing helper crowd can trigger a read-only warning for
+ChatGPT/Codex, Claude Code, and other apps. The warning asks you to save work
+and review unused tabs or restart the owning app; it never kills a live coding
+session. Notifications must be enabled in Machogs and allowed by macOS. A
+warning identifies resource use, not proof of a leak. This monitor is in the
+native app; the CLI's existing process report is unchanged.
+
+The native app also offers **Automatically clean confirmed abandoned helpers** in
+Settings (off by default). With your opt-in, a known automation helper must remain
+orphaned, idle, and disconnected for five continuous minutes. Machogs refuses
+helpers with children, terminals, open pipes/sockets, working file descriptors,
+or launch-agent registrations. It checks ownership, process identity, and live
+coding protections again, sends a normal termination request, and records a
+receipt only after exit. There is no force-kill fallback. A missed check, sleep,
+or failed check restarts the observation window. Connected and uncertain helpers,
+duplicate servers, browsers, and live coding sessions still require review.
+This feature does not cure memory growth inside a running app.
 
 ```
 $ machogs
@@ -38,6 +66,7 @@ What it catches: 🔥 stuck spinners cooking your CPU · 👯 clone armies (one 
 honest diagnosis when only a restart will fix it.
 
 ---
+
 
 ## Why is my Mac fan so loud?
 
@@ -160,12 +189,35 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ## Install the Mac app
 
-[Download Machogs 1.2.0](https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg), open the DMG, and drag Machogs to Applications.
+[Download Machogs 1.4.2](https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg), open the DMG, and drag Machogs to Applications.
 
 The app is signed with Developer ID, notarized by Apple, and includes both
 Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
 Start at Login, quit Machogs, then move it from Applications to Trash. Local
 receipts and preferences remain unless you remove them separately.
+
+## Privacy and optional analytics
+
+Checks run on your Mac. Analytics never include process names, file paths,
+command arguments, scan contents, messages or cleanup receipts.
+
+| Choice (off by default) | What is measured | Receiver |
+|---|---|---|
+| App: Settings → Privacy → Share feature usage | App opens, onboarding, bounded feature scan counts and manual action outcomes, version and random install ID | Self-hosted Native Analytics |
+| CLI: explicitly set `MACHOGS_ANALYTICS=1` | Command category and success/failure, random install ID | Self-hosted Native Analytics |
+| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | PostHog |
+
+The native receiver stores the connection IP; native events expire after 90 days.
+App sharing requires a fresh choice when upgrading from the older basic usage
+analytics. Turning it off cancels pending sends and resets the local ID; events
+already received remain until retention expires. Unset `MACHOGS_ANALYTICS` to stop
+CLI sharing. The bundled engine never enables CLI sharing on its own.
+
+These are optional client-reported signals, not exact install counts or audit
+records. Scan events include background checks and must not be treated as active
+people. Delivery is best-effort, without offline retry.
+[Privacy details](https://bnishit.github.io/machogs/privacy.html) ·
+[Measurement contract](docs/analytics.md).
 
 ## Install the CLI
 
@@ -190,21 +242,50 @@ Claude Code, Codex, Cursor:
 > tell me what is hogging my Mac. Show me the findings and ask before closing
 > a process, freeing a port, or clearing a cache.
 
-## Use
+## Use the CLI
+
+Start with a scan, then choose what to close:
 
 ```sh
-machogs              # plain answer. Closes nothing.
-machogs fix          # go through them one at a time, asking before each
-machogs blame        # scoreboard: which app leaves the most junk behind
-machogs brag         # a shareable card of what your Mac has been wasting
-machogs disk         # read-only storage report
-machogs disk clear <path> # clear one engine-approved safe cache, after consent
-machogs ports        # every port in use and who is squatting it
-machogs port 3000    # read-only port report; add `kill` only after consent
-machogs --details    # the technical report, by category
-machogs --json       # machine-readable, for agents
-machogs --check      # audit the safety rules, close nothing
+machogs              # scan only; nothing closes
+machogs fix          # review each finding group in your terminal
 ```
+
+The review names the app and explains what it left behind. Save your work first.
+For each group, press **y** to close it, **Enter** to leave it alone, or **q** to
+stop. A typo asks again. The CLI rechecks the reviewed processes before closing
+and counts only successful closes in the receipt.
+
+```text
+Scan → read the finding → y / Enter / q → see what actually closed
+```
+
+For other questions, start with a read-only command:
+
+| Question | Command |
+|---|---|
+| Where did my storage go? | `machogs disk` |
+| Who holds port 3000? | `machogs port 3000` |
+| What else is listening? | `machogs ports` |
+| Which apps leave the most behind? | `machogs blame` |
+| What leaked this week? | `machogs blame --since=7d` |
+| What did machogs close recently? | `machogs history` |
+| Can I share my cleanup receipt? | `machogs brag` |
+| Can I see technical findings? | `machogs --details` |
+| Are my coding sessions protected? | `machogs --check` |
+| What commands are available? | `machogs --help` |
+
+**Actions are separate.** After reviewing the owner and protections,
+`machogs port 3000 kill` closes an eligible listener without another prompt.
+After reviewing the storage report, `machogs disk clear "/exact/path"` clears
+one reported safe cache or the Trash. Use the exact path; “check first” and
+“your call” locations cannot be cleared by this command.
+
+`machogs fix` needs a terminal. For agents, begin with
+`machogs --json --sessions` and follow [AGENTS.md](AGENTS.md): show the finding,
+get approval, then act. `machogs kill` is an unattended action with no prompts;
+it is not a substitute for reviewing findings. Report exit code **10** means
+there is something to review, not that the scan crashed.
 
 ## Closing something should feel like a win
 
@@ -239,6 +320,12 @@ since 2026-08-17
   a Claude Code plugin              1   91 hours
 ```
 
+Add `--since=7d` (any number of days) to count only recent closes, or
+`--json` to get the scoreboard as one object for scripts and agents. Without
+`--since`, a LAST 7D column shows whether each app is still leaking.
+`--app=ChatGPT` narrows it to one app. `machogs history` lists the closes
+themselves, newest first, and takes the same `--since`, `--app` and `--json`.
+
 And `machogs brag` prints the same thing as something you can paste:
 
 ```
@@ -264,19 +351,19 @@ And `machogs brag` prints the same thing as something you can paste:
   Idle, but holding memory. Oldest has sat there 31 minutes.
   A duplicate. One app started the same helper many times over.
 
-  Close all 11? [y/N]
+  Close 11 programs? [y/N/q]
 ```
 
-## This will not eat your homework
+## Safety before cleanup
 
 It closes programs. That deserves your suspicion, so here is what stops it
 hurting you:
 
-- **It never closes anything on its own.** Running `machogs` only looks. `fix`
+- **The CLI never closes anything on its own.** Running `machogs` only looks. `fix`
   asks you about every single item.
-- **It will never close a coding session.** Claude Code sessions, and the
-  helpers belonging to a live one, are listed and skipped. You do not lose
-  unsaved work.
+- **Live coding sessions are protected.** Running Codex and Claude Code sessions
+  and their helpers are listed and skipped. Closing other programs can lose
+  unsaved work, so review the finding before choosing to close one.
 - **It only touches your own programs.** macOS system processes are out of
   scope entirely.
 - **Programs that are meant to work hard are left alone** — video encoders,
@@ -354,9 +441,3 @@ only real fix, and the tool says so instead of pretending otherwise.
 ## License
 
 MIT
-
-## Optional usage analytics
-
-The Mac app's Settings has **Share anonymous feature usage**, off by default. It sends only feature/outcome counts, version and a random install ID to self-hosted Native Analytics. The receiver also sees your IP; events expire after 90 days. No process names, paths, command arguments or scan data are sent. Turning it off stops future tracking and resets the ID; previously sent events follow retention.
-
-The CLI stays offline unless you explicitly set `MACHOGS_ANALYTICS=1`. To disable it, unset that variable. Its fixed-schema relay has no embedded API key and cannot read the dashboard. These are client-reported usage signals, not verified security/audit evidence.

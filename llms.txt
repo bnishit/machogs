@@ -2,15 +2,15 @@
 
 > machogs is an open-source macOS utility for diagnosing stuck, leaked, and
 > abandoned background work. It names the app responsible, explains each finding
-> in plain English, and is read-only by default. A native Mac app is in
-> available as a signed and notarized universal download for macOS 13 or later.
+> in plain English, and is read-only by default. A native Mac app is
+> available as a Developer ID-signed universal download for macOS 13 or later.
 > The single-file Bash CLI remains available for terminal and agent workflows.
 
 ## Install the native Mac app
 
-Download Machogs 1.2.0:
+Download Machogs 1.4.2:
 
-    https://github.com/bnishit/machogs/releases/download/v1.2.0/Machogs-1.2.0.dmg
+    https://github.com/bnishit/machogs/releases/download/v1.4.2/Machogs-1.4.2.dmg
 
 Open the DMG and drag Machogs to Applications. The app supports Apple silicon
 and Intel. Its first scan is read-only. One-tap Close actions re-verify every target
@@ -65,6 +65,8 @@ for unattended work.
 | `machogs kill --json` | acts | No prompt; use only after explicit consent. |
 | `machogs kill --json --dupes` | acts | Also closes agreed duplicate helpers. |
 | `machogs blame` | reads | Local scoreboard built from successful-close log. |
+| `machogs blame --json --since=7d` | reads | Scoreboard as JSON; `--since=Nd` limits blame, brag or history to the last N days; `--app=NAME` narrows blame or history. |
+| `machogs history --json` | reads | Recent closes, newest first (last 20, or all inside `--since`). |
 | `machogs brag` | reads | Copyable cumulative receipt. |
 | `machogs disk --json` | reads | Storage items with `safe`, `check`, or `yours`. |
 | `machogs disk clear <path>` | deletes | Clears one exact allow-listed safe cache or Trash path. Ask first; exit 3 means refused or missing. |
@@ -116,14 +118,25 @@ findings are not counted unless `--dupes` is present. Always read `findings`.
 
 ## Native app status
 
-Machogs 1.2.0 is the public native app release. Its Developer ID-signed,
-Apple-notarized universal DMG is linked above. The app has a normal window,
+Machogs 1.4.2 is the public native app release. Its Developer ID-signed
+universal DMG is linked above. The app has a normal window,
 menu-bar Hogs, Storage and Ports views, Receipts, and Settings. Verified native
-behavior: one-tap Close re-verifies targets with the engine before acting; process and port
-actions use stable-identity engine planning and an execution-time recheck;
+behavior: manual process and port actions re-verify targets before acting;
+actions use stable process identities and an execution-time recheck;
 stale targets never expand to other findings. The app targets macOS 13 or later
 and does not require an admin password, Full Disk Access, or Accessibility
-access.
+access. Optional usage analytics are off until the user opts in. They record
+first opted-in use and weekly foreground use, never scan contents or file paths.
+See https://bnishit.github.io/machogs/privacy.html.
+
+Automatic cleanup is off by default. With explicit user opt-in, the native app
+can close a known automation helper only after five continuous minutes of
+confirmed abandonment: current-user ownership, parent launchd, idle, no terminal,
+children, registered launch job, open pipes/sockets, or working file descriptors.
+Identity and live-session protections are rechecked immediately before normal
+termination. There is no automatic force-kill fallback. A receipt requires exit.
+The app also checks whole-app and compressed memory every 30 seconds; memory
+warnings do not themselves authorize closing live coding sessions.
 
 ## Canonical sources
 

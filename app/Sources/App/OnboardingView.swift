@@ -10,6 +10,7 @@ struct OnboardingView: View {
     @State private var keepWatch = true
     @State private var allowAlerts = false
     @State private var startAtLogin = true
+    @State private var shareBasicUsage = false
     @State private var finishing = false
     @State private var showSightDetails = false
     @State private var appeared = false
@@ -46,7 +47,7 @@ struct OnboardingView: View {
                 Text("YOUR MAC, UNMASKED").font(.caption.weight(.bold)).tracking(1.5).foregroundStyle(.pink)
                 Text("Your apps don’t always go home when you do.")
                     .font(.system(size: 38, weight: .bold, design: .rounded))
-                Text("Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. Machogs names the app and shows whether it matters.")
+                Text("Browsers, AI tools, and other apps can leave little bits of work running after you’re finished. MacHogs names the app and shows whether it matters.")
                     .font(.title3).foregroundStyle(.secondary)
                 Button { showSightDetails.toggle() } label: { Label("What can the pig see?", systemImage: "eye") }
                     .buttonStyle(.link)
@@ -109,31 +110,40 @@ struct OnboardingView: View {
     }
 
     private var watchChoice: some View {
-        HStack(spacing: 38) {
-            PigStage(mood: .pleased, caption: "One last thing.\nThen I’ll get to work.").frame(width: 230)
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Should the pig keep watch?").font(.system(size: 34, weight: .bold, design: .rounded))
-                Text("You stay in control either way.").font(.title3).foregroundStyle(.secondary)
-                ChoiceCard(title: "Keep watch for me", detail: "Checks every 2 minutes and opens Machogs when it catches something. It never closes anything alone.", selected: keepWatch) { keepWatch = true }
-                ChoiceCard(title: "Only when I open Machogs", detail: "No background checks. Run one whenever your Mac feels wrong.", selected: !keepWatch) {
-                    keepWatch = false; allowAlerts = false; startAtLogin = false
-                }
-                if keepWatch {
-                    Toggle("Tell me when the pig catches something", isOn: $allowAlerts)
-                    Toggle("Start Machogs after I log in", isOn: $startAtLogin)
-                }
-                if let error = settings.setupError {
-                    Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
-                }
-                HStack {
-                    Button("Back") { move(to: 1) }.buttonStyle(.borderless)
-                    Spacer()
-                    Button { finish() } label: {
-                        Label(finishing ? "Opening…" : finishLabel, systemImage: "sparkles")
+        ScrollView {
+            HStack(spacing: 38) {
+                PigStage(mood: .pleased, caption: "One last thing.\nThen I’ll get to work.").frame(width: 230)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Should the pig keep watch?").font(.system(size: 34, weight: .bold, design: .rounded))
+                    Text("You stay in control either way.").font(.title3).foregroundStyle(.secondary)
+                    ChoiceCard(title: "Keep watch for me", detail: "Checks every 2 minutes and opens MacHogs when it catches something. It never closes anything alone.", selected: keepWatch) { keepWatch = true }
+                    ChoiceCard(title: "Only when I open MacHogs", detail: "No background checks. Run one whenever your Mac feels wrong.", selected: !keepWatch) {
+                        keepWatch = false; allowAlerts = false; startAtLogin = false
                     }
-                        .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction).disabled(finishing)
-                }
-            }.frame(maxWidth: 450, alignment: .leading)
+                    if keepWatch {
+                        Toggle("Tell me when the pig catches something", isOn: $allowAlerts)
+                        Toggle("Start MacHogs after I log in", isOn: $startAtLogin)
+                    }
+                    if settings.analyticsAvailable {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Share feature usage (optional)", isOn: $shareBasicUsage)
+                            Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
+                            Link("Privacy details", destination: AppSettings.privacyURL).font(.caption)
+                        }
+                    }
+                    if let error = settings.setupError {
+                        Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                    }
+                    HStack {
+                        Button("Back") { move(to: 1) }.buttonStyle(.borderless)
+                        Spacer()
+                        Button { finish() } label: {
+                            Label(finishing ? "Opening…" : finishLabel, systemImage: "sparkles")
+                        }
+                            .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction).disabled(finishing)
+                    }
+                }.frame(maxWidth: 450, alignment: .leading)
+            }
         }
     }
 
@@ -150,7 +160,7 @@ struct OnboardingView: View {
         if model.hasSwapPressure {
             return "Your Mac is using its disk as emergency working memory. That can make everything feel slow. Closing forgotten work will not undo it—save your work, then restart from the Apple menu."
         }
-        guard let first = model.groups.first else { return "Your apps cleaned up after themselves. If your Mac still feels slow, Machogs did not find the cause." }
+        guard let first = model.groups.first else { return "Your apps cleaned up after themselves. If your Mac still feels slow, MacHogs did not find the cause." }
         let impact = first.isHot ? "This can cause heat, fan noise, and shorter battery life." : "It is idle, so it is not heating your Mac. It is still holding memory."
         let more = model.groups.count > 1 ? " There are \(model.groups.count - 1) more app groups you can inspect." : ""
         return "\(first.story) \(impact)\(more)"
@@ -162,7 +172,7 @@ struct OnboardingView: View {
     }
 
     private var finishLabel: String {
-        guard let first = model.groups.first else { return "Open Machogs" }
+        guard let first = model.groups.first else { return "Open MacHogs" }
         return "Show me what \(owner(first)) left"
     }
 
@@ -173,6 +183,7 @@ struct OnboardingView: View {
     }
     private func finish() {
         finishing = true
+        if settings.analyticsAvailable { settings.setAnalyticsEnabled(shareBasicUsage) }
         Task {
             _ = await settings.completeOnboarding(shoulderTaps: keepWatch && allowAlerts, startAtLogin: keepWatch && startAtLogin)
             finishing = false

@@ -136,14 +136,19 @@ private struct IslandView: View {
 
             if receipt == nil {
                 Button {
+                    if event.kind == .memory {
+                        NSWorkspace.shared.open(URL(string: "\(MachogsBuild.urlScheme)://now")!)
+                        leave()
+                        return
+                    }
                     closeIt()
                     MachogsSound.pop()
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                        receipt = "On it — closing them now 💥"
+                        receipt = "Opening the review"
                     }
                     IslandController.shared.scheduleHide(after: 2.8)
                 } label: {
-                    Text("Close it 💥")
+                    Text(event.kind == .memory ? "Show me" : "Review")
                         .font(.system(.caption, design: .rounded).weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
