@@ -153,6 +153,7 @@ public struct MachogsClient: MachogsServing {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/bash")
             process.arguments = [scriptURL.path] + arguments
+            process.environment = ProcessInfo.processInfo.environment.merging(["MACHOGS_ANALYTICS": "0"]) { _, new in new }
 
             let output = Pipe()
             let errors = Pipe()

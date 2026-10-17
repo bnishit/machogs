@@ -198,29 +198,26 @@ receipts and preferences remain unless you remove them separately.
 
 ## Privacy and optional analytics
 
-Checks run on your Mac. Scan results, process names, file paths, messages, and
-cleanup receipts are never included in analytics. The CLI sends no analytics.
+Checks run on your Mac. Analytics never include process names, file paths,
+command arguments, scan contents, messages or cleanup receipts.
 
-The app and website have separate, optional choices. Both start off:
+| Choice (off by default) | What is measured | Receiver |
+|---|---|---|
+| App: Settings → Privacy → Share feature usage | App opens, onboarding, bounded feature scan counts and manual action outcomes, version and random install ID | Self-hosted Native Analytics |
+| CLI: explicitly set `MACHOGS_ANALYTICS=1` | Command category and success/failure, random install ID | Self-hosted Native Analytics |
+| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | PostHog |
 
-| If you opt in… | What is measured |
-|---|---|
-| Mac app | First observed use after opting in, and one event per UTC week when you open the app or its menu |
-| Website | Landing-page visits and clicks on Mac download buttons |
+The native receiver stores the connection IP; native events expire after 90 days.
+App sharing requires a fresh choice when upgrading from the older basic usage
+analytics. Turning it off cancels pending sends and resets the local ID; events
+already received remain until retention expires. Unset `MACHOGS_ANALYTICS` to stop
+CLI sharing. The bundled engine never enables CLI sharing on its own.
 
-App events include the version, a random installation ID, and whether this was
-a new setup or an existing installation. Website IDs last for one page load and
-are not linked to app IDs. Events go to PostHog; there is no session recording
-or automatic capture of your activity. Background scans do not count as app use.
-
-Turn app sharing off in **Settings → Privacy**. This cancels pending sends and
-clears the local analytics ID; it does not erase events already received.
-Change the website choice on the [privacy page](https://bnishit.github.io/machogs/privacy.html).
-
-These are opted-in usage counts, not an exact install count. Download clicks do
-not prove installation, existing users are counted separately from new setups,
-and resetting preferences or opting in again can create another ID.
-[Measurement details for contributors](docs/analytics.md).
+These are optional client-reported signals, not exact install counts or audit
+records. Scan events include background checks and must not be treated as active
+people. Delivery is best-effort, without offline retry.
+[Privacy details](https://bnishit.github.io/machogs/privacy.html) ·
+[Measurement contract](docs/analytics.md).
 
 ## Install the CLI
 

@@ -24,8 +24,8 @@ struct MachogsApp: App {
 
     init() {
         let service: any MachogsServing = MachogsClient()
-        let model = AppModel(service: service)
         let settings = AppSettings()
+        let model = AppModel(service: service, analytics: settings.analytics)
         // A design launch opens the real overview without onboarding prompts.
         // These are in-memory choices in the isolated design app only.
         if Bundle.main.bundleIdentifier == "com.bnishit.machogs.design",

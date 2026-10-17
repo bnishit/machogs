@@ -153,7 +153,7 @@ struct MainWindow: View {
                 Link("Privacy details", destination: AppSettings.privacyURL).font(.caption)
                 Spacer()
                 Button("No thanks") { settings.setAnalyticsEnabled(false) }
-                Button("Enable basic usage") { settings.setAnalyticsEnabled(true) }
+                Button("Enable feature usage") { settings.setAnalyticsEnabled(true) }
             }
         }
         .padding(12)
@@ -641,7 +641,7 @@ struct SettingsPage: View {
                 if let error = settings.setupError { Text(error).foregroundStyle(.orange) }
             }
             Section("Privacy") {
-                Toggle("Share basic usage", isOn: Binding(
+                Toggle("Share feature usage", isOn: Binding(
                     get: { settings.shareBasicUsage }, set: settings.setAnalyticsEnabled
                 ))
                 .disabled(!settings.analyticsAvailable)

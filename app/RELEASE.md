@@ -95,39 +95,27 @@ download. Publishing is deliberately outside these scripts.
 
 ## Privacy disclosure
 
-Machogs 1.4 adds optional usage analytics through PostHog. The default is off.
-The app sends only a random installation identifier, version, installation kind
-(new or existing), product, environment, event UUID/time, first opted-in use, and one event
-per UTC ISO week with foreground use. It never sends process names, file paths,
-scan results, messages, or cleanup receipts. No autocapture, replay, crash SDK,
-or advertising identifiers are used. Scans and background polling do not count
-as active use. Turning sharing off cancels pending requests and clears the local
-analytics identifier and delivery state; already received events are not erased.
+The updated app replaces PostHog with an optional fixed-schema native relay.
+Sharing starts off and needs a fresh choice in Settings → Privacy, including for
+people who allowed the previous basic usage measurement. App opens, onboarding,
+bounded feature scan counts and manual action outcomes carry version and a random
+install ID. Background scans are feature use, not active-user evidence.
 
-The owner approved shared PostHog project 39922; do not change global settings.
-Both clients disable GeoIP enrichment and person profiles, and send the fixed
-$ip placeholder 0.0.0.0. Live QA confirmed that placeholder is stored without a
-country or person profile; $ip:null instead stored the source IP. Verify ingested
-test events before release. Dashboards must filter product=machogs and
-environment=production. A network provider still sees the source IP while
-handling a request.
-The website has a separate optional choice; app and website IDs are not joined.
-See `docs/privacy.html` for the user-facing disclosure and `docs/analytics.md`
-for the measurement contract and verification steps.
+The receiver stores connection IPs and retains events for 90 days. Process names,
+paths, arguments, scan contents and cleanup receipts are excluded. Opt-out cancels
+pending sends and removes the ID; delivery is best-effort without offline retry.
+The website keeps its separate PostHog choice. The CLI sends only with explicit
+MACHOGS_ANALYTICS=1; the bundled engine always disables that separate channel.
 
-The app still reads processes, ports, memory, selected disk-usage locations,
-and its local receipt log only to explain the Mac's state. It stores settings in
-macOS preferences and receipts in `~/Library/Logs/machogs.log`. Closing processes,
-freeing ports, and clearing allowed caches require explicit user actions.
-
-`PrivacyInfo.xcprivacy` declares installation identifiers and product interaction
-for analytics, linked by the installation identifier, with no cross-app tracking.
-UserDefaults retains the `CA92.1` reason. The release verifier checks this contract
-and requires a public capture token and an approved HTTPS ingestion host.
+Keep docs/privacy.html and docs/analytics.md aligned before release. The privacy
+manifest declares identifiers, product interaction and other data (connection IP),
+with no cross-app tracking and UserDefaults reason CA92.1. The release verifier
+still requires universal binaries, Developer ID, hardened runtime, timestamp,
+notarization and Gatekeeper. No provider token belongs in the native bundle.
 
 ## GitHub automation boundary
 
-The repository has no checked-in GitHub Actions release workflow. Before adding
+The Mac checks workflow tests and builds a development app; it does not publish a release. The repository has no checked-in GitHub Actions release workflow. Before adding
 one, first restore GitHub CLI access and inspect branch protection, Actions
 permissions, environments, and existing secrets. The first public release
 should use the local, witnessed flow above. Automate it only after one complete

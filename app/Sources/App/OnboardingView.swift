@@ -126,7 +126,7 @@ struct OnboardingView: View {
                     }
                     if settings.analyticsAvailable {
                         VStack(alignment: .leading, spacing: 4) {
-                            Toggle("Share basic usage (optional)", isOn: $shareBasicUsage)
+                            Toggle("Share feature usage (optional)", isOn: $shareBasicUsage)
                             Text(AppSettings.analyticsExplanation).font(.caption).foregroundStyle(.secondary)
                             Link("Privacy details", destination: AppSettings.privacyURL).font(.caption)
                         }

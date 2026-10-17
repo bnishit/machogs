@@ -126,7 +126,7 @@ actions use stable process identities and an execution-time recheck;
 stale targets never expand to other findings. The app targets macOS 13 or later
 and does not require an admin password, Full Disk Access, or Accessibility
 access. Optional usage analytics are off until the user opts in. They record
-first opted-in use and weekly foreground use, never scan contents or file paths.
+first opted-in use and weekly foreground use in released builds, never scan contents or file paths. The pending native-analytics update instead needs a fresh choice for feature counts and action outcomes; the self-hosted receiver stores connection IPs for 90 days.
 See https://bnishit.github.io/machogs/privacy.html.
 
 Automatic cleanup is off by default. With explicit user opt-in, the native app

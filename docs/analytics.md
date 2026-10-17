@@ -1,63 +1,54 @@
 # Machogs measurement contract
 
-Collection is optional on both the website and app, off until chosen. The owner
-approved shared PostHog project 39922. Its global settings must not be changed for
-Machogs. Capture tokens are public, write-only project identifiers; no personal
-API keys belong in clients.
+## Updated native app and CLI
 
-Dashboard: https://us.posthog.com/project/39922/dashboard/2116324
+Sharing is optional and off by default. The app requires a new choice in Settings
+→ Privacy even when the old PostHog basic-usage choice was enabled. Development,
+design and --analytics-test app builds never send to the production relay.
 
-## Events and interpretation
+| Event | Meaning |
+|---|---|
+| app.opened | Opted-in foreground activation, throttled to once a minute |
+| onboarding.completed | Completion of setup while opted in |
+| scan.completed | Process, memory, storage or port check; once per feature per minute |
+| action.completed | Outcome and bounded closed count from a confirmed manual review |
+| cli.* | Explicitly opted-in CLI command category and outcome |
 
-| Event | Count | Boundaries |
-|---|---|---|
-| machogs_website_visit | Opted-in landing page views | New random ID per page load; not unique people |
-| machogs_download_clicked | Opted-in download clicks | placement: nav, hero, install; not completed downloads |
-| machogs_app_first_seen | First observed opted-in app use | Filter installation_kind=new_install for new setups; existing_install for upgrade users |
-| machogs_app_active_week | Distinct opted-in installations with foreground use | Once per UTC ISO calendar week; background scans excluded |
+Native app payload keys are id, install_id, consent, event, version, feature,
+outcome, count and duration_ms. Counts are capped at 100000 and duration at one
+hour. CLI payloads omit count and duration. No process names, paths, arguments,
+scan contents, messages, credentials or receipt contents are allowed.
 
-All dashboard tiles must filter product=machogs and environment=production, so
-other products in the shared project stay separate. QA uses environment=test.
-App first_seen and active_week use the same random installation identifier; the
-website uses an unrelated page identifier. Only visit-to-download-click can form
-a same-ID funnel. Do not publish a website-to-install conversion rate or ad
-attribution from these events. Resets and repeated opt-in can inflate install counts.
-Homebrew CLI installs are not instrumented. GitHub release asset download counts
-remain available separately and include release checks/repeated downloads.
+The fixed HTTPS endpoint is
+https://native-analytics-production.up.railway.app/v1/relay/machogs.
+No producer key is embedded. The receiver stores connection IPs and retains
+events for 90 days. Opt-out cancels pending app requests and resets the ID;
+already received events remain. Delivery is best-effort with no offline retry.
+CLI users explicitly set MACHOGS_ANALYTICS=1 and unset it to stop collection.
+The app forces this variable off for its bundled engine.
 
-Native delivery retries on the next foreground activity, with the same event UUID
-until a successful HTTP acknowledgement. There is no background analytics timer.
-Opt-out cancels in-flight work, discards unsent state and deletes the local ID;
-already received events remain. The website never delays a download for analytics.
-Blocked requests, opt-outs and failed delivery all cause undercounts.
+Background scan counts are not active-user counts. Do not combine this schema
+with older first-use/weekly-use events. Random IDs can reset and do not prove
+unique people, installs, security events or website-to-install conversion.
 
-## Payload boundary
+Run Python CLI tests, Swift core tests and a dev build. Tests use mock transports:
+no live scan, cleanup or production analytics send is needed. Check default-off,
+old-consent isolation, dev silence, payload limits, throttling, opt-out cancellation
+and identity reset. A real launched-app check and signed/notarized release remain
+separate gates before public distribution.
 
-Native: event, random installation ID, event UUID/time, app_version, platform,
-environment, product, installation_kind; provider control properties disable person
-profiles and GeoIP and set $ip to the fixed placeholder 0.0.0.0. Web: event, random per-page ID,
-event UUID, app_version, platform, environment, product and allowlisted button
-placement. No raw URLs, UTM values, referrers, hardware IDs, process names,
-file paths, scan contents, screen recording, or arbitrary extra properties.
-Both clients send the same IP placeholder. Live QA on 20 September 2026 confirmed
-that PostHog stored 0.0.0.0, no country, and person processing disabled. Sending
-$ip:null was insufficient: the service stored the source IP instead. Do not revert
-to null or depend on global IP settings. PostHog still sees the connection's source
-IP while handling the network request.
+## Website and previously released app
 
-## Configuration and checks
+Website collection remains separately optional in docs/analytics.js and
+analytics-config.js, using shared PostHog project 39922. Do not change its global
+settings. Events machogs_website_visit and machogs_download_clicked use unrelated
+random IDs per page load. Person processing and GeoIP enrichment are disabled;
+the payload uses the fixed IP placeholder 0.0.0.0. The network provider still sees
+the connection IP. Honor Do Not Track and Global Privacy Control.
 
-- App: Info.plist MachogsAnalyticsToken and MachogsAnalyticsHost. Release builds
-  with production bundle ID only. Default/dev/design builds never collect.
-- Website: docs/analytics-config.js. Only bnishit.github.io/machogs/ sends normal
-  events. Local QA requires explicit analytics_test=1 and is tagged test.
-- Native QA: launch signed app with --analytics-test for separate analytics-only
-  preferences and environment=test. This must not touch production consent.
-- Verify zero requests before consent, exact allowlisted payloads after consent,
-  deduplicated same-week use, opt-out cancellation, offline retry, and dev silence.
-- Read ingested test events from PostHog and confirm $ip=0.0.0.0, no location
-  enrichment or sensitive data, and person processing disabled. Confirm the
-  production dashboard filters product=machogs and excludes environment=test.
-- Sources: https://posthog.com/docs/api/capture and
-  https://posthog.com/tutorials/web-redact-properties; Apple privacy manifest:
-  https://developer.apple.com/documentation/bundleresources/describing-data-use-in-privacy-manifests
+Released app versions using the prior basic-usage implementation send
+machogs_app_first_seen and machogs_app_active_week after consent, once per UTC ISO
+week for foreground use. Those versions remain unchanged by this branch.
+Dashboard: https://us.posthog.com/project/39922/dashboard/2116324.
+Filter older data by product=machogs and environment=production; QA is test.
+Download clicks and GitHub asset downloads do not prove installed active users.

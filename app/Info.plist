@@ -33,10 +33,6 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
-	<key>MachogsAnalyticsHost</key>
-	<string>https://us.i.posthog.com</string>
-	<key>MachogsAnalyticsToken</key>
-	<string>phc_NKeUtSphlVzbxyDgYR58znBU0M0gAv6yjldCx65AOg4</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT license — github.com/bnishit/machogs</string>
 </dict>

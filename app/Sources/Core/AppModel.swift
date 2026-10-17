@@ -99,6 +99,7 @@ public final class AppModel: ObservableObject {
     private var abandonedSince: [ProcessTarget: Date] = [:]
     private var lastAbandonedCheck: Date?
 
+    private let analytics: UsageAnalytics?
     private let service: any MachogsServing
     @Published public private(set) var memorySnapshot: MemorySnapshot?
     @Published public private(set) var memoryScanError: String?
@@ -107,7 +108,8 @@ public final class AppModel: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var watchdog = WatchdogPolicy()
 
-    public init(service: any MachogsServing, defaults: UserDefaults = .standard) {
+    public init(service: any MachogsServing, defaults: UserDefaults = .standard, analytics: UsageAnalytics? = nil) {
+        self.analytics = analytics
         self.service = service
         self.defaults = defaults
         automaticCleanupEnabled = defaults.bool(forKey: "automaticAbandonedCleanup")
@@ -146,11 +148,13 @@ public final class AppModel: ObservableObject {
             scanError = nil
             lastSuccessfulScan = Date()
             if let event = watchdog.evaluate(fresh) { watchdogEvent = event }
+            analytics?.track("scan.completed", feature: .process, count: fresh.groups.count)
             await cleanAbandonedHelpers()
         } catch {
             abandonedSince.removeAll()
             lastAbandonedCheck = nil
             scanError = error.localizedDescription
+            analytics?.track("scan.completed", feature: .process, outcome: .failure)
         }
     }
 
@@ -192,6 +196,7 @@ public final class AppModel: ObservableObject {
             let fresh = try await service.inspectMemory()
             memorySnapshot = fresh
             memoryScanError = nil
+            analytics?.track("scan.completed", feature: .memory)
             if let event = watchdog.evaluateMemory(fresh) { watchdogEvent = event }
         } catch {
             memoryScanError = "Memory check failed. The last reading may be old."
@@ -206,6 +211,7 @@ public final class AppModel: ObservableObject {
         do {
             portsReport = try await service.inspectPorts()
             lastSuccessfulPortsScan = Date()
+            analytics?.track("scan.completed", feature: .ports)
         }
         catch { portsError = error.localizedDescription }
     }
@@ -218,6 +224,7 @@ public final class AppModel: ObservableObject {
         do {
             diskReport = try await service.inspectDisk()
             lastSuccessfulDiskScan = Date()
+            analytics?.track("scan.completed", feature: .disk)
         }
         catch { diskError = error.localizedDescription }
     }
@@ -362,6 +369,12 @@ public final class AppModel: ObservableObject {
         guard let review = pendingReview, !isActing else { return }
         isActing = true
         defer { isActing = false }
+        let feature: UsageAnalytics.Feature
+        switch review.kind {
+        case .processes: feature = .process
+        case .port: feature = .ports
+        case .disk: feature = .disk
+        }
         do {
             switch review.kind {
             case .processes(let findings):
@@ -396,7 +409,9 @@ public final class AppModel: ObservableObject {
                                          isSuccess: result.freedMB > 0, canShare: false, kind: .disk)
                 Task { await loadDisk() }
             }
+            analytics?.track("action.completed", feature: feature, outcome: receipt?.isSuccess == true ? .success : .failure, count: receipt?.closedCount ?? 0)
         } catch {
+            analytics?.track("action.completed", feature: feature, outcome: .failure)
             switch review.kind {
             case .processes: scanError = error.localizedDescription
             case .port: portsError = error.localizedDescription

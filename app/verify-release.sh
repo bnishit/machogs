@@ -25,12 +25,12 @@ with open(sys.argv[1], 'rb') as f: privacy = plistlib.load(f)
 with open(sys.argv[2], 'rb') as f: info = plistlib.load(f)
 types = privacy['NSPrivacyCollectedDataTypes']
 assert {x['NSPrivacyCollectedDataType'] for x in types} == {
-    'NSPrivacyCollectedDataTypeDeviceID', 'NSPrivacyCollectedDataTypeProductInteraction'}
+    'NSPrivacyCollectedDataTypeDeviceID', 'NSPrivacyCollectedDataTypeProductInteraction',
+    'NSPrivacyCollectedDataTypeOtherDataTypes'}
 assert all(x['NSPrivacyCollectedDataTypePurposes'] == ['NSPrivacyCollectedDataTypePurposeAnalytics']
            and x['NSPrivacyCollectedDataTypeLinked'] is True
            and x['NSPrivacyCollectedDataTypeTracking'] is False for x in types)
-assert info.get('MachogsAnalyticsToken', '').startswith('phc_'), 'Release needs a configured public capture token'
-assert info.get('MachogsAnalyticsHost') in ('https://us.i.posthog.com', 'https://eu.i.posthog.com')
+assert 'MachogsAnalyticsToken' not in info and 'MachogsAnalyticsHost' not in info, 'Native relay must not embed provider credentials'
 PYTHON
     test "$(plutil -extract NSPrivacyTrackingDomains json -o - "$PRIVACY")" = "[]"
     test "$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPIType raw -o - "$PRIVACY")" = "NSPrivacyAccessedAPICategoryUserDefaults"
