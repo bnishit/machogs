@@ -205,7 +205,7 @@ command arguments, scan contents, messages or cleanup receipts.
 |---|---|---|
 | App: Settings → Privacy → Share feature usage | App opens, onboarding, bounded feature scan counts and manual action outcomes, version and random install ID | Self-hosted Native Analytics |
 | CLI: explicitly set `MACHOGS_ANALYTICS=1` | Command category and success/failure, random install ID | Self-hosted Native Analytics |
-| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | PostHog |
+| Website: allow on the privacy page | Landing-page visits and download clicks, unrelated ID per page load | Self-hosted Native Analytics |
 
 The native receiver stores the connection IP; native events expire after 90 days.
 App sharing requires a fresh choice when upgrading from the older basic usage

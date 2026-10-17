@@ -4,8 +4,8 @@
   const config = window.machogsAnalyticsConfig;
   const test = new URLSearchParams(location.search).get('analytics_test') === '1';
   const production = location.hostname === 'bnishit.github.io' && location.pathname.startsWith('/machogs/');
-  const available = config?.token && ['https://us.i.posthog.com', 'https://eu.i.posthog.com'].includes(config.host) && (production || test);
-  const key = test ? 'machogs.analytics.test.choice' : 'machogs.analytics.choice';
+  const available = config?.project === 'machogs' && config.host === 'https://native-analytics-production.up.railway.app' && (production || test);
+  const key = test ? 'machogs.native.analytics.test.choice' : 'machogs.native.analytics.choice';
   const blocked = navigator.globalPrivacyControl === true || navigator.doNotTrack === '1';
   let choice;
   try { choice = localStorage.getItem(key); } catch { /* Choice lasts for this page only. */ }
@@ -17,18 +17,15 @@
     if (!available || blocked || choice !== 'yes' || (!test && navigator.webdriver)) return;
     if (placement !== undefined && !['nav', 'hero', 'install'].includes(placement)) return;
     if (!crypto.randomUUID) return;
-    pageID ||= 'web_' + crypto.randomUUID();
+    pageID ||= crypto.randomUUID();
     const controller = new AbortController();
     pending.add(controller);
     const payload = {
-      api_key: config.token, event, distinct_id: pageID, uuid: crypto.randomUUID(),
-      properties: {
-        product: 'machogs', platform: 'web', environment: test ? 'test' : 'production',
-        app_version: config.version, ...(placement ? {placement} : {}),
-        $process_person_profile: false, $geoip_disable: true, $ip: '0.0.0.0'
-      }
+      id: crypto.randomUUID(), install_id: pageID, consent: true,
+      event, feature: 'web', outcome: 'success', version: config.version,
+      ...(placement ? { placement } : {})
     };
-    fetch(config.host + '/i/v0/e/', {
+    fetch(config.host + '/v1/relay/' + config.project, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload), credentials: 'omit', referrerPolicy: 'no-referrer',
       keepalive: true, signal: controller.signal
@@ -38,7 +35,7 @@
   function visit() {
     if (landing && choice === 'yes' && !visited && document.visibilityState === 'visible') {
       visited = true;
-      capture('machogs_website_visit');
+      capture('web.page_view');
     }
   }
 
@@ -69,7 +66,7 @@
     });
   });
   document.querySelectorAll('a[data-download-placement]').forEach(link => {
-    link.addEventListener('click', () => capture('machogs_download_clicked', link.dataset.downloadPlacement));
+    link.addEventListener('click', () => capture('web.download_clicked', link.dataset.downloadPlacement));
   });
   // Consent withdrawn in another tab applies here too.
   window.addEventListener('storage', event => {

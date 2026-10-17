@@ -42,8 +42,9 @@ esac
 
 BINARIES=()
 for arch in $ARCHS; do
-    swift build -c release --arch "$arch"
-    bin_dir=$(swift build -c release --arch "$arch" --show-bin-path)
+    scratch="$ROOT/.build/release-$arch"
+    swift build -c release --arch "$arch" --scratch-path "$scratch"
+    bin_dir=$(swift build -c release --arch "$arch" --scratch-path "$scratch" --show-bin-path)
     BINARIES+=("$bin_dir/MachogsApp")
 done
 

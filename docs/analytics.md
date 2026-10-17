@@ -37,18 +37,8 @@ old-consent isolation, dev silence, payload limits, throttling, opt-out cancella
 and identity reset. A real launched-app check and signed/notarized release remain
 separate gates before public distribution.
 
-## Website and previously released app
+## Website and previously released apps
 
-Website collection remains separately optional in docs/analytics.js and
-analytics-config.js, using shared PostHog project 39922. Do not change its global
-settings. Events machogs_website_visit and machogs_download_clicked use unrelated
-random IDs per page load. Person processing and GeoIP enrichment are disabled;
-the payload uses the fixed IP placeholder 0.0.0.0. The network provider still sees
-the connection IP. Honor Do Not Track and Global Privacy Control.
+The website uses the same fixed-schema Native Analytics relay after a fresh, separate consent choice. It sends `web.page_view` and `web.download_clicked`, version, feature=web, optional nav/hero/install placement, and an unrelated UUID per page load. It stores no persistent visitor ID and never joins website activity with app IDs. The receiver retains the connection IP for 90 days. Global Privacy Control and Do Not Track disable collection; choosing no cancels pending sends. Only the exact GitHub Pages HTTPS origin is allowed by the relay's browser policy. No collector key is in browser code.
 
-Released app versions using the prior basic-usage implementation send
-machogs_app_first_seen and machogs_app_active_week after consent, once per UTC ISO
-week for foreground use. Those versions remain unchanged by this branch.
-Dashboard: https://us.posthog.com/project/39922/dashboard/2116324.
-Filter older data by product=machogs and environment=production; QA is test.
-Download clicks and GitHub asset downloads do not prove installed active users.
+Older released app versions can still send their previous first-use/weekly-use PostHog events until updated. No historical provider data is copied or deleted. Download clicks and GitHub asset downloads do not prove installed active users.

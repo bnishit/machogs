@@ -1,6 +1,6 @@
-// Public capture token only. Never put a personal/admin API key here.
+// Public fixed-schema relay only. Never embed a producer or owner key here.
 window.machogsAnalyticsConfig = Object.freeze({
-  token: 'phc_NKeUtSphlVzbxyDgYR58znBU0M0gAv6yjldCx65AOg4',
-  host: 'https://us.i.posthog.com',
-  version: '1.4.2'
+  host: 'https://native-analytics-production.up.railway.app',
+  project: 'machogs',
+  version: '1.4.3'
 });
