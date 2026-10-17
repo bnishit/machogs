@@ -30,6 +30,12 @@ struct BustView: View {
     // Live groups this catch is about. A stale catch falls back to everything
     // still closable, so the window never lies about what the button will do.
     private var targets: [FindingGroup] {
+        // A memory warning names an app, not processes: offer that app's
+        // leftover workers (tools from chats gone still), never the app itself.
+        if let event, event.kind == .memory {
+            let app = event.groupID.split(separator: "|", maxSplits: 1).last.map(String.init)
+            return model.groups.filter { $0.owner == app }
+        }
         if let event, !event.targets.isEmpty {
             let identities = Set(event.targets.map(\.identity))
             let hit = model.groups.filter { group in
@@ -46,8 +52,8 @@ struct BustView: View {
             header.joyReveal(appeared, delay: 0)
             if let receipt {
                 receiptCard(receipt)
-            } else if event?.kind == .memory {
-                Text("This is a memory warning, not proof of a leak. Your coding sessions stay open. Save your work before restarting an app.")
+            } else if event?.kind == .memory && targets.isEmpty {
+                Text("No leftover workers to close yet. Tools from chats you have used in the last hour stay open. Save your work before restarting the app.")
                     .font(.callout).foregroundStyle(.secondary)
                 Button("Got it") { dismiss() }
             } else if targets.isEmpty {
