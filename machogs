@@ -10,6 +10,7 @@
 #
 # LOOK AROUND — these commands change nothing
 #   machogs disk            see where storage went
+#   machogs worktrees       list old coding copies (git worktrees) and what is safe
 #   machogs ports           list listening ports and their owners
 #   machogs port 3000       inspect one port
 #   machogs blame           see which apps left the most behind
@@ -28,6 +29,7 @@
 #   machogs kill --dupes    also close duplicate helpers (keeps newest)
 #   machogs port 3000 kill  close an eligible listener WITHOUT asking
 #   machogs disk clear "/exact/path"  clear one reported safe cache or Trash
+#   machogs worktrees remove "/exact/path"  remove one coding copy reported safe
 #   machogs plan --json --target=123:ID  recheck a reviewed process identity
 #   machogs kill --json --target=123:ID  close only that reviewed identity
 #
@@ -87,9 +89,12 @@ for a in "$@"; do
     brag)        MODE=brag ;;
     history)     MODE=history ;;
     disk)        MODE=disk ;;
+    worktrees)   MODE=worktrees ;;
+    remove)      if [ "$MODE" = worktrees ]; then MODE=worktree-remove; else
+                   echo "remove goes with worktrees: machogs worktrees remove <path>" >&2; exit 2; fi ;;
     clear)       if [ "$MODE" = disk ] || [ "$MODE" = clear-pending ]; then MODE=clear-pending; else
                    echo "clear goes with disk: machogs disk clear <path>" >&2; exit 2; fi ;;
-    /*|~*)       if [ "$MODE" = clear-pending ]; then CLEAR_PATH=$a; else
+    /*|~*)       if [ "$MODE" = clear-pending ] || [ "$MODE" = worktree-remove ]; then CLEAR_PATH=$a; else
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
     [0-9]*)      if [ "$PORTS" -eq 1 ]; then PORT_NUM=$a; else
                    echo "unknown arg: $a (try --help)" >&2; exit 2; fi ;;
@@ -547,22 +552,27 @@ protected() {
 # carry a live session even after launchd adopts its process.
 abandoned_helper() {
   local pid=$1 uid pp tty cpu handles
-  is_mcp "$pid" || return 1
   uid=$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')
   [ "$uid" = "$(id -u)" ] || return 1
+  cpu=$(cpu_of "$pid")
+  awk -v c="$cpu" 'BEGIN {exit !(c != "" && c+0 <= 2)}' || return 1
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null); local child_status=$?
+  [ "$child_status" -eq 1 ] && [ -z "$children" ] || return 1
+  # A tool from a chat that went still (section 2c). Its parent, the chat
+  # app's server, is still running, so the orphan checks below cannot apply.
+  # stale_chat_tools matched it to that chat exactly and is rebuilt right
+  # before every close.
+  case " ${STALE_TOOLS:-} " in *" $pid "*) return 0 ;; esac
+  is_mcp "$pid" || return 1
   pp=$(ppid_of "$pid"); [ "$pp" = 1 ] || return 1
   tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
   [ "$tty" = '??' ] || return 1
-  cpu=$(cpu_of "$pid")
-  awk -v c="$cpu" 'BEGIN {exit !(c != "" && c+0 <= 2)}' || return 1
   # A launch agent may legitimately be parented by launchd. Keep any process
   # registered as a job, and fail closed if launchctl cannot inspect it.
   local jobs
   jobs=$(launchctl list 2>/dev/null) || return 1
   echo "$jobs" | awk -v p="$pid" '$1==p {found=1} END {exit !found}' && return 1
-  local children
-  children=$(pgrep -P "$pid" 2>/dev/null); local child_status=$?
-  [ "$child_status" -eq 1 ] && [ -z "$children" ] || return 1
   handles=$(lsof -nP -a -p "$pid" -F ftn 2>/dev/null) || return 1
   printf '%s\n' "$handles" | awk -v p="$pid" '
     function check() {if (record && (!typed || (numeric && !named))) bad=1}
@@ -877,6 +887,126 @@ Downloads|⬇️|$HOME/Downloads|yours|You know what is in there."
   exit 0
 fi
 
+# ---- worktrees: old coding copies -------------------------------------------
+# Coding agents make a full copy of a project for every task (a git worktree)
+# and rarely clean up. One busy week left 13 GB of them. Reporting changes
+# nothing. `worktrees remove <path>` removes one copy that this script marks
+# safe at that moment: no uncommitted files, no commits that live only there,
+# not locked, no program working inside it, and untouched for
+# WORKTREE_IDLE_DAYS. Git does the removal and refuses a dirty copy on its own.
+# The branch and its commits stay, so `git worktree add` brings it back.
+WORKTREE_IDLE_DAYS=${WORKTREE_IDLE_DAYS:-3}
+REBUILDABLE='(^|/)(node_modules|\.next|\.nuxt|\.svelte-kit|dist|build|out|\.output|\.turbo|\.cache|\.parcel-cache|coverage|\.nyc_output|__pycache__|\.venv|venv|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|\.build|\.swiftpm|DerivedData|target|\.gradle|\.DS_Store|[^/]*\.pyc|[^/]*\.log|[^/]*\.tsbuildinfo|\.eslintcache|next-env\.d\.ts)/?$'
+if [ "$MODE" = worktrees ] || [ "$MODE" = worktree-remove ]; then
+  export GIT_OPTIONAL_LOCKS=0   # looking must not touch the copies' files
+  # Every repository with copies. `worktree list` then finds them wherever
+  # they live, including the ones the Codex app keeps in ~/.codex/worktrees.
+  worktree_repos() {
+    for d in "$HOME"/dev/*/ "$HOME"/.codex/worktrees/*/*/; do
+      [ -e "$d.git" ] || continue
+      git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+    done | sort -u
+  }
+  # Linked copies of one repository (never the main checkout): path<TAB>flags
+  worktree_paths() {
+    git --git-dir="$1" worktree list --porcelain 2>/dev/null | awk '
+      /^worktree / {if (p != "" && n > 1 && !gone) print p "\t" f; p=substr($0,10); n++; f=""; gone=0}
+      /^detached/ {f=f "detached "} /^locked/ {f=f "locked "} /^prunable/ {gone=1}
+      END {if (p != "" && n > 1 && !gone) print p "\t" f}'
+  }
+  # Working folders of every program you run, read once.
+  CWDS=$(lsof -a -d cwd -u "$(id -u)" -Fn 2>/dev/null | sed -n 's/^n//p')
+  # One copy -> path|project|branch|idle_days|changed|only_here|size_kb|verdict|why
+  worktree_row() {
+    local wt=$1 common=$2 flags=$3 project branch changed only_here last t gitdir days sizek verdict why
+    project=$(basename "$(dirname "$common")")
+    branch=$(git -C "$wt" branch --show-current 2>/dev/null); [ -n "$branch" ] || branch="(no branch)"
+    if changed=$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' '); then :; else changed=unknown; fi
+    # Files git ignores on purpose are not saved anywhere: .env keys, local
+    # databases, data exports. Only folders a build or install recreates may go.
+    local kept
+    kept=$(git -C "$wt" status --porcelain --ignored 2>/dev/null | sed -n 's/^!! //p' |
+      grep -vE "$REBUILDABLE" | head -1) || true
+    only_here=0
+    case "$flags" in *detached*)
+      only_here=$(git -C "$wt" rev-list --count HEAD --not --branches --remotes 2>/dev/null) || only_here=unknown ;;
+    esac
+    gitdir=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)
+    last=$(git -C "$wt" log -1 --format=%ct 2>/dev/null); last=${last:-0}
+    for t in "$wt" "$gitdir/index" "$gitdir/HEAD"; do
+      t=$(stat -f %m "$t" 2>/dev/null) && [ "$t" -gt "$last" ] && last=$t
+    done
+    days=$(( ($(date +%s) - last) / 86400 ))
+    verdict=keep sizek=0
+    if [ "$changed" = unknown ] || [ "$only_here" = unknown ]; then why="Git could not read it, so it stays."
+    elif [ "$changed" -gt 0 ]; then why="$changed file$([ "$changed" -gt 1 ] && echo s) changed and not committed."
+    elif [ "$only_here" -gt 0 ]; then why="$only_here commit$([ "$only_here" -gt 1 ] && echo s) exist only in this copy."
+    elif [ -n "$kept" ]; then why="Has files git does not save (${kept%/})."
+    elif case "$flags" in *locked*) true ;; *) false ;; esac; then why="Locked by the app that made it."
+    elif printf '%s\n' "$CWDS" | awk -v w="$wt" 'index($0, w) == 1 && (length($0) == length(w) || substr($0, length(w) + 1, 1) == "/") {f=1} END {exit !f}'; then
+      why="A program is working in it right now."
+    elif [ "$days" -lt "$WORKTREE_IDLE_DAYS" ]; then why="Used in the last $WORKTREE_IDLE_DAYS days."
+    else verdict=safe; why="Everything in it is saved in git. Untouched for $days days."
+    fi
+    # Measuring is the slow part, and only matters for what can go.
+    [ "$verdict" = safe ] && sizek=$(du -sk "$wt" 2>/dev/null | cut -f1)
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$wt" "$project" "$branch" "$days" "$changed" "$only_here" "${sizek:-0}" "$verdict" "$why"
+  }
+
+  if [ "$MODE" = worktree-remove ]; then
+    [ -n "$CLEAR_PATH" ] || { echo "Pick a path: machogs worktrees remove <path>" >&2; exit 2; }
+    CLEAR_PATH=$(cd "$CLEAR_PATH" 2>/dev/null && pwd -P) || { echo "Nothing there." >&2; exit 3; }
+    common=$(git -C "$CLEAR_PATH" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    line=$([ -n "$common" ] && worktree_paths "$common" | awk -F'\t' -v w="$CLEAR_PATH" '$1 == w')
+    [ -n "$line" ] || { echo "Refusing: $CLEAR_PATH is not a coding copy machogs lists." >&2; exit 3; }
+    row=$(worktree_row "$CLEAR_PATH" "$common" "${line#*$'\t'}")
+    IFS='|' read -r _ project branch _ _ _ sizek verdict why <<< "$row"
+    [ "$verdict" = safe ] || { echo "Refusing: $why" >&2; exit 3; }
+    git --git-dir="$common" worktree remove "$CLEAR_PATH" 2>/dev/null || { echo "Refusing: git would not remove it." >&2; exit 3; }
+    freed_mb=$(( sizek / 1024 )); label="Old coding copy of $project ($branch)"
+    printf '%s\tcleared\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$label" "$CLEAR_PATH" "$freed_mb" >> "$LOG"
+    if [ "$JSON" -eq 1 ]; then
+      printf '{"mode": "clear", "path": "%s", "label": "%s", "freed_mb": %s}\n' "$(jesc "$CLEAR_PATH")" "$(jesc "$label")" "$freed_mb"
+    else
+      echo "🎉 Removed the $project copy for $branch — got back $(awk -v m="$freed_mb" 'BEGIN{ if (m>=1024) printf "%.1f GB", m/1024; else printf "%d MB", m }'). The branch is still there."
+    fi
+    exit 0
+  fi
+
+  WT_ROWS=$(worktree_repos | while read -r common; do
+    worktree_paths "$common" | while IFS=$'\t' read -r wt flags; do worktree_row "$wt" "$common" "$flags"; done
+  done | sort -t'|' -k8,8r -k7,7rn)
+  if [ "$JSON" -eq 1 ]; then
+    printf '{"mode": "worktrees", "idle_days": %s, "items": [' "$WORKTREE_IDLE_DAYS"
+    sep=""
+    while IFS='|' read -r wt project branch days changed only_here sizek verdict why; do
+      [ -n "$wt" ] || continue
+      case "$changed" in ''|*[!0-9]*) changed=-1 ;; esac
+      case "$only_here" in ''|*[!0-9]*) only_here=-1 ;; esac
+      printf '%s\n  {"path": "%s", "project": "%s", "branch": "%s", "idle_days": %s, "changed_files": %s, "only_here_commits": %s, "size_mb": %s, "verdict": "%s", "why": "%s"}' \
+        "$sep" "$(jesc "$wt")" "$(jesc "$project")" "$(jesc "$branch")" "$days" "$changed" "$only_here" "$((sizek / 1024))" "$verdict" "$(jesc "$why")"
+      sep=","
+    done < <(printf '%s\n' "$WT_ROWS")
+    printf '\n]}\n'
+    exit 0
+  fi
+  echo
+  if [ -z "$WT_ROWS" ]; then echo "${GRN}No extra coding copies found.${NC}"; echo; exit 0; fi
+  safe_mb=$(printf '%s\n' "$WT_ROWS" | awk -F'|' '$8=="safe"{k+=$7} END{printf "%d", k/1024}')
+  echo "${BLD}Old coding copies${NC} ${DIM}(git worktrees made for one task each)${NC}"
+  echo
+  while IFS='|' read -r wt project branch days changed only_here sizek verdict why; do
+    [ -n "$wt" ] || continue
+    mark="${DIM}keep${NC}"; [ "$verdict" = safe ] && mark="${GRN}safe${NC}"
+    printf "  %-5s %-8s %-18s %-36s %s\n" "$mark" "$(awk -v k="$sizek" 'BEGIN{ if (k>=1048576) printf "%.1f GB", k/1048576; else printf "%d MB", k/1024 }')" "${project:0:18}" "${branch:0:36}" "$why"
+  done < <(printf '%s\n' "$WT_ROWS")
+  echo
+  echo "${BLD}$(awk -v m="$safe_mb" 'BEGIN{printf "%.1f GB", m/1024}')${NC} is safe to remove. Remove one with: machogs worktrees remove \"<path>\""
+  echo "${DIM}Paths: machogs worktrees --json. Branches and commits always stay.${NC}"
+  echo
+  exit 0
+fi
+
 # ---- ports: who is squatting your ports ------------------------------------
 # "Port 3000 is already in use" — the error that never says WHO. This does.
 #   machogs ports            every listening port, in plain words
@@ -1068,7 +1198,7 @@ queue() {
   local pid=$1 reason=$2 identity
   alive "$pid" || return
   if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then
-    [ "$SECTION" = 2 ] && abandoned_helper "$pid" || return
+    case "$SECTION" in 2|2c) abandoned_helper "$pid" || return ;; *) return ;; esac
   fi
   identity=$(identity_of "$pid"); [ -n "$identity" ] || return
   # A targeted app request is deliberately narrow. A reused or already-gone
@@ -1426,7 +1556,7 @@ if [ "$JSON" -eq 1 ]; then
   first=1
   while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
     [ -n "$p" ] || continue
-    if [ "${ABANDONED_ONLY:-0}" -eq 1 ] && [ "$sec" != 2 ]; then continue; fi
+    if [ "${ABANDONED_ONLY:-0}" -eq 1 ] && [ "$sec" != 2 ] && [ "$sec" != 2c ]; then continue; fi
     if [ -n "$TARGETS" ] && ! targeted "$p" "$identity"; then continue; fi
     # a queued process that flush_kills actually reaped is reported as killed
     case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac

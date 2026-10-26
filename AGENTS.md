@@ -32,7 +32,7 @@ Note: `machogs fix` needs a real terminal and will refuse to run without one.
 Use `machogs kill` for unattended work.
 
 The native app has a separate opt-in automatic cleanup mode for confirmed
-abandoned automation helpers. This is not permission for an agent to close
+abandoned automation helpers and tools from chats gone still (section 2c). This is not permission for an agent to close
 other findings. `--abandoned-only` reports only the strict automatic candidates;
 `kill --abandoned-only --target=PID:IDENTITY` rechecks those exact candidates.
 The app observes them for five continuous minutes first. It never auto-closes
@@ -54,6 +54,9 @@ connected helpers or live sessions and never force-kills automatic candidates.
 - **Never lower the thresholds to make findings appear.** `HOT_CPU` and
   `SPIN_CPU_SECONDS` exist for testing the detector. Lowering them in real use
   turns busy processes into false positives you will then kill.
+- **Never remove a coding copy before showing `machogs worktrees` and asking.**
+  Pass back only the exact path of a `safe` item. A `keep` item has unsaved
+  work; never remove it by hand with `git worktree remove --force` instead.
 - **Never clear a cache before showing the disk finding and asking.** Only pass
   back the exact path from a `safe` item. Never improvise a path, and never use
   `check` or `yours` items as deletion targets.

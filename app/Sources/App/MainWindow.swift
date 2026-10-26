@@ -363,6 +363,7 @@ struct StoragePage: View {
                 } else {
                     ProgressView("Measuring storage…").frame(maxWidth: .infinity).padding(40)
                 }
+                WorktreesSection(model: model)
             }
             .padding(20)
         }
@@ -379,6 +380,89 @@ struct StoragePage: View {
         report.items.filter { $0.verdict == "safe" }.reduce(0) { $0 + $1.sizeMB }
     }
     private func sizeText(_ mb: Int) -> String {
+        mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
+    }
+}
+
+/// Extra copies of projects that coding agents made, one per task. Only copies
+/// whose every file is saved in git get a Remove button.
+struct WorktreesSection: View {
+    @ObservedObject var model: AppModel
+    @State private var confirming: [WorktreeItem] = []
+    @State private var showKept = false
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                if let error = model.worktreesError {
+                    ErrorCard(message: error, retry: { Task { await model.loadWorktrees() } })
+                } else if let report = model.worktreesReport {
+                    content(report)
+                } else {
+                    ProgressView("Checking your coding copies. This takes about a minute.")
+                        .frame(maxWidth: .infinity).padding(20)
+                }
+            }.padding(4)
+        } label: { Label("Old coding copies", systemImage: "square.on.square") }
+        .task { if model.worktreesReport == nil { await model.loadWorktrees() } }
+        .confirmationDialog(confirmTitle, isPresented: Binding(get: { !confirming.isEmpty }, set: { if !$0 { confirming = [] } })) {
+            Button("Remove", role: .destructive) {
+                let items = confirming
+                Task { await model.removeWorktrees(items) }
+            }
+        } message: {
+            Text("Each copy is checked again first. Branches and commits stay, so any copy can be made again with git.")
+        }
+    }
+
+    @ViewBuilder private func content(_ report: WorktreesReport) -> some View {
+        Text("Coding agents make a full copy of a project for each task and leave it behind. These have everything saved in git and have not been touched for days.")
+            .font(.caption).foregroundStyle(.secondary)
+        if report.safe.isEmpty {
+            Text("Nothing to remove. Every copy has unsaved work or was used recently.").font(.callout)
+        } else {
+            HStack {
+                Text("\(size(report.safeMB)) in \(report.safe.count) cop\(report.safe.count == 1 ? "y" : "ies")").font(.headline)
+                Spacer()
+                Button("Remove all…") { confirming = report.safe }.disabled(model.isActing)
+            }
+            ForEach(report.safe) { item in
+                Divider()
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack { Text(item.project).font(.headline); Text(item.sizeText).foregroundStyle(.secondary) }
+                        Text(item.branch).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                        Text(item.why).font(.caption).foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.path) }
+                    Button("Remove…") { confirming = [item] }.disabled(model.isActing)
+                }
+            }
+        }
+        let kept = report.items.filter { !$0.isSafe }
+        if !kept.isEmpty {
+            Divider()
+            DisclosureGroup("\(kept.count) cop\(kept.count == 1 ? "y stays" : "ies stay"): unsaved work or recent use", isExpanded: $showKept) {
+                ForEach(kept) { item in
+                    HStack {
+                        Text("\(item.project) · \(item.branch)").font(.caption).lineLimit(1)
+                        Spacer()
+                        Text(item.why).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.font(.callout)
+        }
+    }
+
+    private var confirmTitle: String {
+        let mb = confirming.reduce(0) { $0 + $1.sizeMB }
+        return confirming.count == 1
+            ? "Remove the \(confirming[0].project) copy for \(confirming[0].branch)?"
+            : "Remove \(confirming.count) old coding copies (\(size(mb)))?"
+    }
+
+    private func size(_ mb: Int) -> String {
         mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
     }
 }
@@ -621,14 +705,16 @@ struct SettingsPage: View {
             Section("Background") {
                 Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
-                Text("Alerts open MacHogs for review.").font(.caption).foregroundStyle(.secondary)
+                Text("Close or snooze right from the alert. Alerts clear themselves once the problem is gone.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Evening recap", isOn: $settings.eveningRecap).disabled(!shoulderTaps)
+                Text("One quiet note after 6 pm: what got closed today and whether there is room to make.").font(.caption).foregroundStyle(.secondary)
                 notificationRow
                 Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
-                Toggle("Automatically clean confirmed abandoned helpers", isOn: $model.automaticCleanupEnabled)
-                Text("Only disconnected automation helpers, abandoned for five minutes. Live sessions, connected helpers and uncertain cases stay open. Off by default.")
+                Toggle("Automatically close leftover helpers", isOn: $model.automaticCleanupEnabled)
+                Text("Helpers whose app is gone, and tools from chats untouched for an hour, once they stay that way for five minutes. Live sessions, busy tools and uncertain cases stay open. Off by default.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(model.automaticCleanupStatus).font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -654,7 +740,7 @@ struct SettingsPage: View {
             }
             Section("Safety") {
                 PromiseRow("Checks are read-only unless automatic cleanup is enabled.")
-                PromiseRow("Automatic cleanup only closes confirmed abandoned helpers. Other cleanup needs your review. Every close is checked again.")
+                PromiseRow("Automatic cleanup only closes leftover helpers and tools from old chats. Other cleanup needs your OK. Every close is checked again.")
                 PromiseRow("Live coding sessions and macOS stay protected.")
                 PromiseRow("Personal files never get a delete button.")
             }

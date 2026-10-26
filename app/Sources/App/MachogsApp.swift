@@ -141,21 +141,50 @@ private final class SuccessSoundCoordinator {
 /// window is closed — that is the whole point of a watchdog.
 @MainActor
 private final class WatchdogNotifier {
-    private var cancellable: AnyCancellable?
+    private var cancellables: Set<AnyCancellable> = []
 
     init(model: AppModel, settings: AppSettings) {
-        _ = NotificationCoordinator.shared
-        cancellable = model.$watchdogEvent
+        NotificationCoordinator.shared.model = model
+        model.$watchdogEvent
             .compactMap { $0 }
             .sink { [weak settings, weak model] event in
-                guard let settings, settings.onboardingComplete, settings.shoulderTaps else { return }
-                NotificationCoordinator.shared.post(event, sound: settings.soundOn)
-                guard let model else { return }
+                guard let settings, settings.onboardingComplete, settings.shoulderTaps, let model else { return }
+                let targets = event.kind == .memory ? model.leftovers(for: event).flatMap(\.targets) : event.targets
+                NotificationCoordinator.shared.post(event, targets: targets, sound: settings.soundOn)
                 IslandController.shared.show(
                     event: event,
                     closeIt: { Task { await model.closeTargetsNow(event.targets) } },
                     leaveIt: { model.snoozeGroup(event.groupID, minutes: 60) }
                 )
             }
+            .store(in: &cancellables)
+        // Every scan: banners about things already closed (by hand, by
+        // automatic cleanup, or by the app that owned them) go away.
+        // The first scan after 6 pm also sends the day's recap.
+        model.$report
+            .compactMap { $0 }
+            .sink { [weak settings, weak model] report in
+                NotificationCoordinator.shared.clearResolved(
+                    live: Set(report.actionableFindings.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }))
+                if let settings, let model { Self.sendRecapIfDue(model: model, settings: settings) }
+            }
+            .store(in: &cancellables)
+    }
+
+    private static func sendRecapIfDue(model: AppModel, settings: AppSettings, now: Date = Date()) {
+        let today = now.formatted(.iso8601.year().month().day())
+        guard settings.onboardingComplete, settings.shoulderTaps, settings.eveningRecap,
+              Calendar.current.component(.hour, from: now) >= 18, settings.lastRecapDay != today else { return }
+        settings.lastRecapDay = today
+        Task {
+            await model.loadDisk()
+            await model.loadWorktrees()
+            let path = NSString(string: "~/Library/Logs/machogs.log").expandingTildeInPath
+            let log = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            let free = model.diskReport.map { max(0, $0.disk.totalGB - $0.disk.usedGB) }
+            guard let recap = DailyRecap.make(log: log, now: now, freeGB: free,
+                                              removableCopiesMB: model.worktreesReport?.safeMB ?? 0) else { return }
+            NotificationCoordinator.shared.post(recap, sound: false)
+        }
     }
 }

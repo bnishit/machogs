@@ -328,6 +328,51 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertTrue(fake.automaticTargets.isEmpty)
     }
 
+    @MainActor
+    func testAutomaticCleanupClosesToolsFromChatsGoneStill() async throws {
+        let stale = finding(pid: 20, identity: "chat").replacingOccurrences(of: "\"section\":\"2\"", with: "\"section\":\"2c\"")
+        let fake = FakeService(scanReport: try fixture([stale]), planReport: try fixture([]), closeReport: try fixture([]))
+        let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        model.automaticCleanupEnabled = true
+        for minute in 0...5 { await model.cleanAbandonedHelpers(now: Date(timeIntervalSince1970: Double(1_000 + minute * 60))) }
+        XCTAssertEqual(fake.automaticTargets, [ProcessTarget(pid: 20, identity: "chat")])
+    }
+
+    @MainActor
+    func testNoAlertForLeftoversAutomaticCleanupWillClose() async throws {
+        let rows = (1...8).map { finding(pid: 100 + $0, identity: "t\($0)").replacingOccurrences(of: "\"section\":\"2\"", with: "\"section\":\"2c\"") }
+        for enabled in [true, false] {
+            let fake = FakeService(scanReport: try fixture([]), planReport: try fixture([]), closeReport: try fixture([]))
+            let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            model.automaticCleanupEnabled = enabled
+            await model.scan()
+            fake.scanReport = try fixture(rows)
+            await model.scan()
+            XCTAssertEqual(model.watchdogEvent == nil, enabled, "enabled=\(enabled)")
+        }
+    }
+
+    func testEveningRecapSummarisesTodayOnly() {
+        let log = """
+        2026-10-25 21:00:00\tclosed\t1\tChatGPT\tnode\t0.0\t600
+        2026-10-26 12:00:00\tclosed\t2\tChatGPT\tautomatic cleanup: node\t0.0\t90
+        2026-10-26 13:00:00\tclosed\t3\tChatGPT\tautomatic cleanup: AI tool helper\t0.0\t60
+        2026-10-26 14:00:00\tclosed\t4\tCursor\tnode\t0.0\t30
+        2026-10-26 15:00:00\tcleared\tnpm cache\t/Users/x/.npm\t2048
+        """
+        let now = ISO8601DateFormatter().date(from: "2026-10-26T19:00:00Z")!
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(identifier: "UTC")!
+        let formatterZone = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+        defer { NSTimeZone.default = formatterZone }
+        let recap = DailyRecap.make(log: log, now: now, freeGB: 41, removableCopiesMB: 9300, calendar: utc)
+        XCTAssertEqual(recap?.title, "Today: 3 leftovers closed")
+        XCTAssertEqual(recap?.body, "2 closed on their own, 1 by you. They had used 3 min of CPU. Cleared 2.0 GB of storage. 9.1 GB of old coding copies can go. 41 GB free.")
+        XCTAssertEqual(recap?.page, "storage")
+        XCTAssertNil(DailyRecap.make(log: "", now: now, freeGB: 200, removableCopiesMB: 0, calendar: utc), "a quiet day sends nothing")
+        XCTAssertEqual(DailyRecap.make(log: "", now: now, freeGB: 12, removableCopiesMB: 0, calendar: utc)?.title, "Your Mac is low on space")
+    }
+
     private func finding(pid: Int, identity: String, action: String = "reapable", owner: String = "ChatGPT", what: String = "browser helper", story: String = "ChatGPT left a helper behind.", cpu: Double = 0) -> String {
         """
         {"pid":\(pid),"identity":"\(identity)","section":"2","action":"\(action)","cpu":\(cpu),"cpu_seconds":12,"age":"01:00:00","owner":"\(owner)","what":"\(what)","detail":"orphaned helper","story":"\(story)"}

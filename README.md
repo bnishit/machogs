@@ -10,7 +10,7 @@ Machogs is a free, signed and Apple-notarized Mac app. Start with
 **Overview** for a plain-English finding, a count of protected work left alone,
 and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
 when you need them. Manual cleanup stays under your control. Automatic cleanup
-is opt-in and limited to disconnected abandoned helpers.
+is opt-in and limited to leftover helpers and tools from chats gone still.
 
 **New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
 every feature, or change your choice later in **Settings → Privacy**.
@@ -29,14 +29,32 @@ session. Notifications must be enabled in Machogs and allowed by macOS. A
 warning identifies resource use, not proof of a leak. This monitor is in the
 native app; the CLI's existing process report is unchanged.
 
-The native app also offers **Automatically clean confirmed abandoned helpers** in
-Settings (off by default). With your opt-in, a known automation helper must remain
-orphaned, idle, and disconnected for five continuous minutes. Machogs refuses
-helpers with children, terminals, open pipes/sockets, working file descriptors,
-or launch-agent registrations. It checks ownership, process identity, and live
+The native app also offers **Automatically close leftover helpers** in Settings
+(off by default). With your opt-in, a candidate must stay one for five continuous
+minutes. Two kinds qualify. A known automation helper that is orphaned, idle, and
+disconnected: Machogs refuses helpers with children, terminals, open
+pipes/sockets, working file descriptors, or launch-agent registrations. Or an
+idle, childless tool that Codex (alone or inside ChatGPT) started for a chat
+whose transcript has not moved for an hour. It checks ownership, process identity, and live
 coding protections again, sends a normal termination request, and records a
 receipt only after exit. There is no force-kill fallback. A missed check, sleep,
-or failed check restarts the observation window. Connected and uncertain helpers,
+or failed check restarts the observation window. Alerts skip anything automatic
+cleanup is about to close, offer Close and Not now right on the banner, and
+clear themselves once their processes are gone.
+
+**Old coding copies.** Codex, Claude Code and other agents make a full copy of
+a project (a git worktree) for each task and leave it behind. Storage lists
+them. A copy gets a Remove button only when every file in it is saved in git:
+nothing uncommitted, no commits that live only there, no git-ignored files
+except rebuildable folders like `node_modules` (so `.env` files keep a copy),
+no program working inside it, and untouched for three days. Git removes it and
+keeps the branch, so `git worktree add` brings it back. In Terminal:
+`machogs worktrees` and `machogs worktrees remove "<path>"`.
+
+**Evening recap.** With alerts on, one quiet notification after 6 pm says what
+was closed that day, what storage was cleared, how much old coding copies take,
+and how much space is free. A day with nothing to say sends nothing. Turn it
+off in Settings. Connected and uncertain helpers,
 duplicate servers, browsers, and live coding sessions still require review.
 This feature does not cure memory growth inside a running app.
 
