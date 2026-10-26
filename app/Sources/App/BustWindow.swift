@@ -30,12 +30,7 @@ struct BustView: View {
     // Live groups this catch is about. A stale catch falls back to everything
     // still closable, so the window never lies about what the button will do.
     private var targets: [FindingGroup] {
-        // A memory warning names an app, not processes: offer that app's
-        // leftover workers (tools from chats gone still), never the app itself.
-        if let event, event.kind == .memory {
-            let app = event.groupID.split(separator: "|", maxSplits: 1).last.map(String.init)
-            return model.groups.filter { $0.owner == app }
-        }
+        if let event, event.kind == .memory { return model.leftovers(for: event) }
         if let event, !event.targets.isEmpty {
             let identities = Set(event.targets.map(\.identity))
             let hit = model.groups.filter { group in

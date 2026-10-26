@@ -621,14 +621,14 @@ struct SettingsPage: View {
             Section("Background") {
                 Toggle("Notify me when a hog sticks around", isOn: $shoulderTaps)
                     .onChange(of: shoulderTaps) { value in Task { await settings.setShoulderTaps(value) } }
-                Text("Alerts open MacHogs for review.").font(.caption).foregroundStyle(.secondary)
+                Text("Close or snooze right from the alert. Alerts clear themselves once the problem is gone.").font(.caption).foregroundStyle(.secondary)
                 notificationRow
                 Toggle("Open MacHogs at login", isOn: $startAtLogin)
                     .onChange(of: startAtLogin) { value in
                         if !settings.setStartAtLogin(value) { startAtLogin = settings.startAtLogin }
                     }
-                Toggle("Automatically clean confirmed abandoned helpers", isOn: $model.automaticCleanupEnabled)
-                Text("Only disconnected automation helpers, abandoned for five minutes. Live sessions, connected helpers and uncertain cases stay open. Off by default.")
+                Toggle("Automatically close leftover helpers", isOn: $model.automaticCleanupEnabled)
+                Text("Helpers whose app is gone, and tools from chats untouched for an hour, once they stay that way for five minutes. Live sessions, busy tools and uncertain cases stay open. Off by default.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(model.automaticCleanupStatus).font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -654,7 +654,7 @@ struct SettingsPage: View {
             }
             Section("Safety") {
                 PromiseRow("Checks are read-only unless automatic cleanup is enabled.")
-                PromiseRow("Automatic cleanup only closes confirmed abandoned helpers. Other cleanup needs your review. Every close is checked again.")
+                PromiseRow("Automatic cleanup only closes leftover helpers and tools from old chats. Other cleanup needs your OK. Every close is checked again.")
                 PromiseRow("Live coding sessions and macOS stay protected.")
                 PromiseRow("Personal files never get a delete button.")
             }

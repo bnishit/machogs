@@ -32,7 +32,7 @@ Note: `machogs fix` needs a real terminal and will refuse to run without one.
 Use `machogs kill` for unattended work.
 
 The native app has a separate opt-in automatic cleanup mode for confirmed
-abandoned automation helpers. This is not permission for an agent to close
+abandoned automation helpers and tools from chats gone still (section 2c). This is not permission for an agent to close
 other findings. `--abandoned-only` reports only the strict automatic candidates;
 `kill --abandoned-only --target=PID:IDENTITY` rechecks those exact candidates.
 The app observes them for five continuous minutes first. It never auto-closes

@@ -65,6 +65,15 @@ class AutomaticCleanupTests(unittest.TestCase):
                 self.assertIn('ELIGIBLE=1', self.run_rule(setup))
                 self.assertNotIn('TERM\n', self.run_rule(setup, close=True))
 
+    def test_idle_tool_from_a_still_chat_is_eligible_under_a_live_parent(self):
+        # The chat app's server is its parent and holds its pipes. Section 2c.
+        live = "stale_chat_tools() { echo 101; }; STALE_TOOLS=' 101 '; PARENT=20; HANDLES=$'p101\\nf0\\ntPIPE\\nnpipe'"
+        self.assertIn('ELIGIBLE=0', self.run_rule(live))
+        self.assertIn('TERM\n', self.run_rule(live, close=True))
+        for setup in ['CPU=5', 'CHILD_STATUS=0', 'UID_VALUE=0', "STALE_TOOLS=' 999 '"]:
+            with self.subTest(setup=setup):
+                self.assertIn('ELIGIBLE=1', self.run_rule(live + '; ' + setup))
+
     def test_identity_is_rechecked_and_new_connections_block_close(self):
         self.assertNotIn('TERM\n', self.run_rule('CURRENT_ID=reused', close=True))
         self.assertNotIn('TERM\n', self.run_rule('PARENT=22', close=True))

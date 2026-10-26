@@ -547,22 +547,27 @@ protected() {
 # carry a live session even after launchd adopts its process.
 abandoned_helper() {
   local pid=$1 uid pp tty cpu handles
-  is_mcp "$pid" || return 1
   uid=$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')
   [ "$uid" = "$(id -u)" ] || return 1
+  cpu=$(cpu_of "$pid")
+  awk -v c="$cpu" 'BEGIN {exit !(c != "" && c+0 <= 2)}' || return 1
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null); local child_status=$?
+  [ "$child_status" -eq 1 ] && [ -z "$children" ] || return 1
+  # A tool from a chat that went still (section 2c). Its parent, the chat
+  # app's server, is still running, so the orphan checks below cannot apply.
+  # stale_chat_tools matched it to that chat exactly and is rebuilt right
+  # before every close.
+  case " ${STALE_TOOLS:-} " in *" $pid "*) return 0 ;; esac
+  is_mcp "$pid" || return 1
   pp=$(ppid_of "$pid"); [ "$pp" = 1 ] || return 1
   tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
   [ "$tty" = '??' ] || return 1
-  cpu=$(cpu_of "$pid")
-  awk -v c="$cpu" 'BEGIN {exit !(c != "" && c+0 <= 2)}' || return 1
   # A launch agent may legitimately be parented by launchd. Keep any process
   # registered as a job, and fail closed if launchctl cannot inspect it.
   local jobs
   jobs=$(launchctl list 2>/dev/null) || return 1
   echo "$jobs" | awk -v p="$pid" '$1==p {found=1} END {exit !found}' && return 1
-  local children
-  children=$(pgrep -P "$pid" 2>/dev/null); local child_status=$?
-  [ "$child_status" -eq 1 ] && [ -z "$children" ] || return 1
   handles=$(lsof -nP -a -p "$pid" -F ftn 2>/dev/null) || return 1
   printf '%s\n' "$handles" | awk -v p="$pid" '
     function check() {if (record && (!typed || (numeric && !named))) bad=1}
@@ -1068,7 +1073,7 @@ queue() {
   local pid=$1 reason=$2 identity
   alive "$pid" || return
   if [ "${ABANDONED_ONLY:-0}" -eq 1 ]; then
-    [ "$SECTION" = 2 ] && abandoned_helper "$pid" || return
+    case "$SECTION" in 2|2c) abandoned_helper "$pid" || return ;; *) return ;; esac
   fi
   identity=$(identity_of "$pid"); [ -n "$identity" ] || return
   # A targeted app request is deliberately narrow. A reused or already-gone
@@ -1426,7 +1431,7 @@ if [ "$JSON" -eq 1 ]; then
   first=1
   while IFS=$'\t' read -r p sec act cpu age detail csec identity; do
     [ -n "$p" ] || continue
-    if [ "${ABANDONED_ONLY:-0}" -eq 1 ] && [ "$sec" != 2 ]; then continue; fi
+    if [ "${ABANDONED_ONLY:-0}" -eq 1 ] && [ "$sec" != 2 ] && [ "$sec" != 2c ]; then continue; fi
     if [ -n "$TARGETS" ] && ! targeted "$p" "$identity"; then continue; fi
     # a queued process that flush_kills actually reaped is reported as killed
     case " $KILLED_PIDS " in *" $p "*) act="killed" ;; esac

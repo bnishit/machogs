@@ -97,6 +97,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var automaticCleanupStatus = "No automatic cleanup yet."
     private let defaults: UserDefaults
     private var abandonedSince: [ProcessTarget: Date] = [:]
+    /// What automatic cleanup is watching or just closed. Alerts about these
+    /// would only ask the user to do what the app is about to do itself.
+    private var automaticTargets: Set<ProcessTarget> = []
     private var lastAbandonedCheck: Date?
 
     private let analytics: UsageAnalytics?
@@ -147,11 +150,12 @@ public final class AppModel: ObservableObject {
             report = fresh
             scanError = nil
             lastSuccessfulScan = Date()
-            if let event = watchdog.evaluate(fresh) { watchdogEvent = event }
             analytics?.track("scan.completed", feature: .process, count: fresh.groups.count)
             await cleanAbandonedHelpers()
+            if let event = watchdog.evaluate(fresh), !isAutomaticallyHandled(event.targets) { watchdogEvent = event }
         } catch {
             abandonedSince.removeAll()
+            automaticTargets.removeAll()
             lastAbandonedCheck = nil
             scanError = error.localizedDescription
             analytics?.track("scan.completed", feature: .process, outcome: .failure)
@@ -161,6 +165,7 @@ public final class AppModel: ObservableObject {
     public func cleanAbandonedHelpers(now: Date = Date()) async {
         guard automaticCleanupEnabled, !isActing, !isReviewing, pendingReview == nil else {
             abandonedSince.removeAll()
+            automaticTargets.removeAll()
             return
         }
         do {
@@ -170,8 +175,10 @@ public final class AppModel: ObservableObject {
                 abandonedSince.removeAll()
             }
             lastAbandonedCheck = now
-            let candidates = Set(fresh.actionableFindings.filter { $0.section == "2" && $0.action == .reapable }
+            // 2: helpers whose app is gone. 2c: tools from chats still for an hour.
+            let candidates = Set(fresh.actionableFindings.filter { ["2", "2c"].contains($0.section) && $0.action == .reapable }
                 .map { ProcessTarget(pid: $0.pid, identity: $0.identity) })
+            automaticTargets = candidates
             // A missed/failed poll restarts the five-minute observation window.
             abandonedSince = abandonedSince.filter { candidates.contains($0.key) && now.timeIntervalSince($0.value) >= 0 }
             for target in candidates where abandonedSince[target] == nil { abandonedSince[target] = now }
@@ -183,10 +190,11 @@ public final class AppModel: ObservableObject {
             for target in ready { abandonedSince.removeValue(forKey: target) }
             let closed = result.killedFindings.count
             automaticCleanupStatus = closed > 0
-                ? "Automatically closed \(closed) abandoned helper\(closed == 1 ? "" : "s"). Live sessions were left alone."
-                : "Rechecked abandoned helpers. Nothing confirmed closed."
+                ? "Automatically closed \(closed) leftover helper\(closed == 1 ? "" : "s"). Live sessions were left alone."
+                : "Rechecked leftover helpers. Nothing confirmed closed."
         } catch {
             abandonedSince.removeAll()
+            automaticTargets.removeAll()
             automaticCleanupStatus = "Automatic cleanup check failed. Nothing else was closed."
         }
     }
@@ -349,6 +357,17 @@ public final class AppModel: ObservableObject {
 
     public func closeEverythingNow() async {
         await closeTargetsNow(groups.flatMap(\.targets))
+    }
+
+    public func isAutomaticallyHandled(_ targets: [ProcessTarget]) -> Bool {
+        automaticCleanupEnabled && !targets.isEmpty && automaticTargets.isSuperset(of: targets)
+    }
+
+    /// A memory warning names an app, not processes: offer that app's leftover
+    /// workers (tools from chats gone still), never the app itself.
+    public func leftovers(for event: WatchdogEvent) -> [FindingGroup] {
+        let app = event.groupID.split(separator: "|", maxSplits: 1).last.map(String.init)
+        return groups.filter { $0.owner == app }
     }
 
     public func snoozeGroup(_ groupID: String, minutes: Int = 60) {

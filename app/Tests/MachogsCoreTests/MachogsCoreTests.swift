@@ -328,6 +328,30 @@ final class MachogsCoreTests: XCTestCase {
         XCTAssertTrue(fake.automaticTargets.isEmpty)
     }
 
+    @MainActor
+    func testAutomaticCleanupClosesToolsFromChatsGoneStill() async throws {
+        let stale = finding(pid: 20, identity: "chat").replacingOccurrences(of: "\"section\":\"2\"", with: "\"section\":\"2c\"")
+        let fake = FakeService(scanReport: try fixture([stale]), planReport: try fixture([]), closeReport: try fixture([]))
+        let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        model.automaticCleanupEnabled = true
+        for minute in 0...5 { await model.cleanAbandonedHelpers(now: Date(timeIntervalSince1970: Double(1_000 + minute * 60))) }
+        XCTAssertEqual(fake.automaticTargets, [ProcessTarget(pid: 20, identity: "chat")])
+    }
+
+    @MainActor
+    func testNoAlertForLeftoversAutomaticCleanupWillClose() async throws {
+        let rows = (1...8).map { finding(pid: 100 + $0, identity: "t\($0)").replacingOccurrences(of: "\"section\":\"2\"", with: "\"section\":\"2c\"") }
+        for enabled in [true, false] {
+            let fake = FakeService(scanReport: try fixture([]), planReport: try fixture([]), closeReport: try fixture([]))
+            let model = AppModel(service: fake, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            model.automaticCleanupEnabled = enabled
+            await model.scan()
+            fake.scanReport = try fixture(rows)
+            await model.scan()
+            XCTAssertEqual(model.watchdogEvent == nil, enabled, "enabled=\(enabled)")
+        }
+    }
+
     private func finding(pid: Int, identity: String, action: String = "reapable", owner: String = "ChatGPT", what: String = "browser helper", story: String = "ChatGPT left a helper behind.", cpu: Double = 0) -> String {
         """
         {"pid":\(pid),"identity":"\(identity)","section":"2","action":"\(action)","cpu":\(cpu),"cpu_seconds":12,"age":"01:00:00","owner":"\(owner)","what":"\(what)","detail":"orphaned helper","story":"\(story)"}

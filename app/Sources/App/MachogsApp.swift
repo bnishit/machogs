@@ -141,21 +141,31 @@ private final class SuccessSoundCoordinator {
 /// window is closed — that is the whole point of a watchdog.
 @MainActor
 private final class WatchdogNotifier {
-    private var cancellable: AnyCancellable?
+    private var cancellables: Set<AnyCancellable> = []
 
     init(model: AppModel, settings: AppSettings) {
-        _ = NotificationCoordinator.shared
-        cancellable = model.$watchdogEvent
+        NotificationCoordinator.shared.model = model
+        model.$watchdogEvent
             .compactMap { $0 }
             .sink { [weak settings, weak model] event in
-                guard let settings, settings.onboardingComplete, settings.shoulderTaps else { return }
-                NotificationCoordinator.shared.post(event, sound: settings.soundOn)
-                guard let model else { return }
+                guard let settings, settings.onboardingComplete, settings.shoulderTaps, let model else { return }
+                let targets = event.kind == .memory ? model.leftovers(for: event).flatMap(\.targets) : event.targets
+                NotificationCoordinator.shared.post(event, targets: targets, sound: settings.soundOn)
                 IslandController.shared.show(
                     event: event,
                     closeIt: { Task { await model.closeTargetsNow(event.targets) } },
                     leaveIt: { model.snoozeGroup(event.groupID, minutes: 60) }
                 )
             }
+            .store(in: &cancellables)
+        // Every scan: banners about things already closed (by hand, by
+        // automatic cleanup, or by the app that owned them) go away.
+        model.$report
+            .compactMap { $0 }
+            .sink { report in
+                NotificationCoordinator.shared.clearResolved(
+                    live: Set(report.actionableFindings.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }))
+            }
+            .store(in: &cancellables)
     }
 }
