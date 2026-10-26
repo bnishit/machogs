@@ -8,7 +8,7 @@ function site(blocked=false){
  const requests=[];const controls={};
  const button=choice=>({dataset:{analyticsConsent:choice},addEventListener:(type,fn)=>{controls[choice]=fn;}});
  const yes=button('yes'),no=button('no');const link={dataset:{downloadPlacement:'hero'},addEventListener:(type,fn)=>{controls.download=fn;}};
- const context={window:{machogsAnalyticsConfig:{host:'https://native-analytics-production.up.railway.app',project:'machogs',version:'1.4.3'},addEventListener(){}},
+ const context={window:{machogsAnalyticsConfig:{host:'https://native-analytics-production.up.railway.app',project:'machogs',version:'1.4.4'},addEventListener(){}},
  location:{search:'',hostname:'bnishit.github.io',pathname:'/machogs/'},navigator:{globalPrivacyControl:blocked},
  document:{visibilityState:'visible',addEventListener(){},querySelectorAll(selector){
   if(selector==='[data-analytics-consent]')return [yes,no];

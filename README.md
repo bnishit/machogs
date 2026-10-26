@@ -2,7 +2,7 @@
 
 **Finds the hog. Names the app. Leaves live sessions alone.**
 
-**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.3/Machogs-1.4.3.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
+**[Download the Mac app](https://github.com/bnishit/machogs/releases/download/v1.4.4/Machogs-1.4.4.dmg)** · **[Website](https://bnishit.github.io/machogs/)** · free · macOS 13+ · Apple silicon + Intel
 
 ## The Mac app
 
@@ -12,9 +12,14 @@ and a clear next step. Storage, Ports, Receipts, and the menu-bar view are there
 when you need them. Manual cleanup stays under your control. Automatic cleanup
 is opt-in and limited to leftover helpers and tools from chats gone still.
 
+**New in 1.4.4:** automatic cleanup now closes the tools old ChatGPT and Codex
+chats leave running, alerts have Close and Not now buttons and clear
+themselves, Storage finds old coding copies you can safely remove, and an
+optional evening recap tells you what happened today.
+
 **New in 1.4:** optional usage sharing, off by default. Say “No thanks” and use
 every feature, or change your choice later in **Settings → Privacy**.
-[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.3) ·
+[Release notes](https://github.com/bnishit/machogs/releases/tag/v1.4.4) ·
 [Privacy details](https://bnishit.github.io/machogs/privacy.html)
 
 The app needs macOS 13 or later. No admin password, Full Disk Access, or
@@ -207,7 +212,7 @@ belonging to a live Claude Code session — it tells you to quit it there.
 
 ## Install the Mac app
 
-[Download Machogs 1.4.3](https://github.com/bnishit/machogs/releases/download/v1.4.3/Machogs-1.4.3.dmg), open the DMG, and drag Machogs to Applications.
+[Download Machogs 1.4.4](https://github.com/bnishit/machogs/releases/download/v1.4.4/Machogs-1.4.4.dmg), open the DMG, and drag Machogs to Applications.
 
 The app is signed with Developer ID, notarized by Apple, and includes both
 Apple silicon and Intel code. The first scan only looks. To uninstall: turn off
