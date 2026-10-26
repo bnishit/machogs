@@ -171,6 +171,35 @@ public struct DiskReport: Codable, Equatable, Sendable {
     public let items: [DiskItem]
 }
 
+/// A full extra copy of a project that a coding agent made for one task.
+public struct WorktreeItem: Codable, Equatable, Identifiable, Sendable {
+    public let path: String
+    public let project: String
+    public let branch: String
+    public let idleDays: Int
+    public let sizeMB: Int
+    public let verdict: String
+    public let why: String
+
+    public var id: String { path }
+    public var isSafe: Bool { verdict == "safe" }
+    public var sizeText: String {
+        sizeMB >= 1024 ? String(format: "%.1f GB", Double(sizeMB) / 1024) : "\(sizeMB) MB"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, project, branch, verdict, why
+        case idleDays = "idle_days"
+        case sizeMB = "size_mb"
+    }
+}
+
+public struct WorktreesReport: Codable, Equatable, Sendable {
+    public let items: [WorktreeItem]
+    public var safe: [WorktreeItem] { items.filter(\.isSafe) }
+    public var safeMB: Int { safe.reduce(0) { $0 + $1.sizeMB } }
+}
+
 public struct DiskClearResult: Codable, Equatable, Sendable {
     public let mode: String
     public let path: String

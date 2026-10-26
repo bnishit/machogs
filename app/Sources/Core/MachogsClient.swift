@@ -13,12 +13,16 @@ public protocol MachogsServing: Sendable {
     func inspectDisk() async throws -> DiskReport
     func clearDisk(path: String) async throws -> DiskClearResult
     func shareCard() async throws -> String
+    func inspectWorktrees() async throws -> WorktreesReport
+    func removeWorktree(path: String) async throws -> DiskClearResult
 }
 
 public extension MachogsServing {
     func scanAbandoned() async throws -> EngineReport { throw MachogsClientError.invalidResponse }
     func closeAbandoned(targets: [ProcessTarget]) async throws -> EngineReport { throw MachogsClientError.invalidResponse }
     func inspectMemory() async throws -> MemorySnapshot { throw MachogsClientError.invalidResponse }
+    func inspectWorktrees() async throws -> WorktreesReport { throw MachogsClientError.invalidResponse }
+    func removeWorktree(path: String) async throws -> DiskClearResult { throw MachogsClientError.invalidResponse }
 }
 
 public enum MachogsClientError: LocalizedError, Equatable {
@@ -128,6 +132,15 @@ public struct MachogsClient: MachogsServing {
     public func clearDisk(path: String) async throws -> DiskClearResult {
         guard path.hasPrefix("/") else { throw MachogsClientError.invalidResponse }
         return try await decode(["disk", "clear", path, "--json"], as: DiskClearResult.self)
+    }
+
+    public func inspectWorktrees() async throws -> WorktreesReport {
+        try await decode(["worktrees", "--json"], as: WorktreesReport.self)
+    }
+
+    public func removeWorktree(path: String) async throws -> DiskClearResult {
+        guard path.hasPrefix("/") else { throw MachogsClientError.invalidResponse }
+        return try await decode(["worktrees", "remove", path, "--json"], as: DiskClearResult.self)
     }
 
     public func shareCard() async throws -> String {

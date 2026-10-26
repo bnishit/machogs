@@ -16,7 +16,8 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let notNow = UNNotificationAction(identifier: "NOT_NOW", title: "Not now", options: [])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "MACHOGS_REVIEW", actions: [close, notNow], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "MACHOGS_MEMORY", actions: [notNow], intentIdentifiers: [])
+            UNNotificationCategory(identifier: "MACHOGS_MEMORY", actions: [notNow], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "MACHOGS_RECAP", actions: [], intentIdentifiers: [])
         ])
     }
 
@@ -24,18 +25,8 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     /// close, so the banner only offers "Not now".
     func post(_ event: WatchdogEvent, targets: [ProcessTarget], sound: Bool) {
         Task {
+            guard await allowed() else { return }
             let center = UNUserNotificationCenter.current()
-            var settings = await center.notificationSettings()
-            if settings.authorizationStatus == .notDetermined {
-                _ = try? await center.requestAuthorization(options: [.alert, .sound])
-                settings = await center.notificationSettings()
-            }
-            guard settings.authorizationStatus == .authorized
-                || settings.authorizationStatus == .provisional else {
-                NSLog("machogs: shoulder tap dropped — notifications not allowed (status %d)",
-                      settings.authorizationStatus.rawValue)
-                return
-            }
             let content = UNMutableNotificationContent()
             content.title = event.title
             content.body = event.body
@@ -56,13 +47,44 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 
-    /// Removes banners whose processes are all gone, and target-less memory
-    /// warnings after half an hour. A worse reading posts a fresh one.
+    /// Today's recap replaces yesterday's. A click opens the page it points at.
+    func post(_ recap: DailyRecap, sound: Bool) {
+        Task {
+            guard await allowed() else { return }
+            let content = UNMutableNotificationContent()
+            content.title = recap.title
+            content.body = recap.body
+            content.categoryIdentifier = "MACHOGS_RECAP"
+            content.userInfo = ["page": recap.page]
+            if sound { content.sound = .default }
+            try? await UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: "daily-recap", content: content, trigger: nil))
+        }
+    }
+
+    private func allowed() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        var settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+            settings = await center.notificationSettings()
+        }
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            NSLog("machogs: notification dropped — not allowed (status %d)", settings.authorizationStatus.rawValue)
+            return false
+        }
+        return true
+    }
+
+    /// Removes banners whose processes are all gone, and memory warnings with
+    /// nothing to close after half an hour. A worse reading posts a fresh one.
     func clearResolved(live: Set<ProcessTarget>) {
         Task {
             let center = UNUserNotificationCenter.current()
             let resolved = await center.deliveredNotifications().filter { note in
-                let targets = Self.targets(note.request.content.userInfo)
+                let content = note.request.content
+                let targets = Self.targets(content.userInfo)
+                if content.categoryIdentifier == "MACHOGS_RECAP" { return false }
                 return targets.isEmpty ? note.date.timeIntervalSinceNow < -30 * 60 : live.isDisjoint(with: targets)
             }.map(\.request.identifier)
             if !resolved.isEmpty { center.removeDeliveredNotifications(withIdentifiers: resolved) }
@@ -98,7 +120,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         default:
             var components = URLComponents()
             components.scheme = MachogsBuild.urlScheme
-            components.host = "now"
+            components.host = info["page"] as? String ?? "now"
             components.queryItems = targets.map { URLQueryItem(name: "target", value: "\($0.pid):\($0.identity)") }
             if let url = components.url { await MainActor.run { _ = NSWorkspace.shared.open(url) } }
         }

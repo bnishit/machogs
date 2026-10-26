@@ -160,12 +160,31 @@ private final class WatchdogNotifier {
             .store(in: &cancellables)
         // Every scan: banners about things already closed (by hand, by
         // automatic cleanup, or by the app that owned them) go away.
+        // The first scan after 6 pm also sends the day's recap.
         model.$report
             .compactMap { $0 }
-            .sink { report in
+            .sink { [weak settings, weak model] report in
                 NotificationCoordinator.shared.clearResolved(
                     live: Set(report.actionableFindings.map { ProcessTarget(pid: $0.pid, identity: $0.identity) }))
+                if let settings, let model { Self.sendRecapIfDue(model: model, settings: settings) }
             }
             .store(in: &cancellables)
+    }
+
+    private static func sendRecapIfDue(model: AppModel, settings: AppSettings, now: Date = Date()) {
+        let today = now.formatted(.iso8601.year().month().day())
+        guard settings.onboardingComplete, settings.shoulderTaps, settings.eveningRecap,
+              Calendar.current.component(.hour, from: now) >= 18, settings.lastRecapDay != today else { return }
+        settings.lastRecapDay = today
+        Task {
+            await model.loadDisk()
+            await model.loadWorktrees()
+            let path = NSString(string: "~/Library/Logs/machogs.log").expandingTildeInPath
+            let log = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            let free = model.diskReport.map { max(0, $0.disk.totalGB - $0.disk.usedGB) }
+            guard let recap = DailyRecap.make(log: log, now: now, freeGB: free,
+                                              removableCopiesMB: model.worktreesReport?.safeMB ?? 0) else { return }
+            NotificationCoordinator.shared.post(recap, sound: false)
+        }
     }
 }

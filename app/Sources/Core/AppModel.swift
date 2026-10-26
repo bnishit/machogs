@@ -86,6 +86,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var diskError: String?
     @Published public private(set) var isLoadingDisk = false
     @Published public private(set) var lastSuccessfulDiskScan: Date?
+    @Published public private(set) var worktreesReport: WorktreesReport?
+    @Published public private(set) var worktreesError: String?
+    @Published public private(set) var isLoadingWorktrees = false
     @Published public private(set) var watchdogEvent: WatchdogEvent?
 
     @Published public var automaticCleanupEnabled: Bool {
@@ -235,6 +238,40 @@ public final class AppModel: ObservableObject {
             analytics?.track("scan.completed", feature: .disk)
         }
         catch { diskError = error.localizedDescription }
+    }
+
+    public func loadWorktrees() async {
+        guard !isLoadingWorktrees else { return }
+        isLoadingWorktrees = true
+        worktreesError = nil
+        defer { isLoadingWorktrees = false }
+        do { worktreesReport = try await service.inspectWorktrees() }
+        catch { worktreesError = error.localizedDescription }
+    }
+
+    /// The engine rechecks each copy right before git removes it, so a copy
+    /// that changed since the list was made is left alone.
+    public func removeWorktrees(_ items: [WorktreeItem]) async {
+        guard !items.isEmpty, !isActing else { return }
+        isActing = true
+        defer { isActing = false }
+        var removed = 0, freedMB = 0
+        for item in items where item.isSafe {
+            guard let result = try? await service.removeWorktree(path: item.path) else { continue }
+            removed += 1
+            freedMB += result.freedMB
+        }
+        let amount = freedMB >= 1024 ? String(format: "%.1f GB", Double(freedMB) / 1024) : "\(freedMB) MB"
+        let skipped = items.count - removed
+        receipt = CleanupReceipt(
+            closedCount: 0, cpuFreed: 0, cpuSecondsAlreadyUsed: 0,
+            message: removed == 0 ? "Nothing removed. Those copies changed since the check."
+                : "Removed \(removed) old coding cop\(removed == 1 ? "y" : "ies") and got back \(amount). Branches are still there."
+                    + (skipped > 0 ? " \(skipped) changed since the check and stayed." : ""),
+            isSuccess: removed > 0, canShare: false, kind: .disk)
+        analytics?.track("action.completed", feature: .disk, outcome: removed > 0 ? .success : .failure, count: removed)
+        await loadWorktrees()
+        await loadDisk()
     }
 
     public func requestProcessReview(_ groups: [FindingGroup]) async {

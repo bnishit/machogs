@@ -40,7 +40,21 @@ coding protections again, sends a normal termination request, and records a
 receipt only after exit. There is no force-kill fallback. A missed check, sleep,
 or failed check restarts the observation window. Alerts skip anything automatic
 cleanup is about to close, offer Close and Not now right on the banner, and
-clear themselves once their processes are gone. Connected and uncertain helpers,
+clear themselves once their processes are gone.
+
+**Old coding copies.** Codex, Claude Code and other agents make a full copy of
+a project (a git worktree) for each task and leave it behind. Storage lists
+them. A copy gets a Remove button only when every file in it is saved in git:
+nothing uncommitted, no commits that live only there, no git-ignored files
+except rebuildable folders like `node_modules` (so `.env` files keep a copy),
+no program working inside it, and untouched for three days. Git removes it and
+keeps the branch, so `git worktree add` brings it back. In Terminal:
+`machogs worktrees` and `machogs worktrees remove "<path>"`.
+
+**Evening recap.** With alerts on, one quiet notification after 6 pm says what
+was closed that day, what storage was cleared, how much old coding copies take,
+and how much space is free. A day with nothing to say sends nothing. Turn it
+off in Settings. Connected and uncertain helpers,
 duplicate servers, browsers, and live coding sessions still require review.
 This feature does not cure memory growth inside a running app.
 

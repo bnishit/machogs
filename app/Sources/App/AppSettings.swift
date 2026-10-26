@@ -10,6 +10,7 @@ final class AppSettings: ObservableObject {
     @Published var onboardingComplete: Bool
     @Published var shoulderTaps: Bool
     @Published var soundOn: Bool
+    @Published var eveningRecap: Bool { didSet { defaults.set(eveningRecap, forKey: "eveningRecap") } }
     @Published var startAtLogin: Bool
     @Published var setupError: String?
     @Published var notificationStatus: UNAuthorizationStatus = .notDetermined
@@ -48,6 +49,7 @@ final class AppSettings: ObservableObject {
         onboardingComplete = defaults.bool(forKey: "onboardingComplete")
         shoulderTaps = defaults.object(forKey: "watchdogOn") as? Bool ?? true
         soundOn = defaults.object(forKey: "soundOn") as? Bool ?? true
+        eveningRecap = defaults.object(forKey: "eveningRecap") as? Bool ?? true
         startAtLogin = SMAppService.mainApp.status == .enabled
     }
 
@@ -72,6 +74,12 @@ final class AppSettings: ObservableObject {
         onboardingComplete = true
         analytics.track("onboarding.completed")
         return loginConfigured
+    }
+
+    /// The day of the last evening recap, so it goes out once a day.
+    var lastRecapDay: String? {
+        get { defaults.string(forKey: "lastRecapDay") }
+        set { defaults.set(newValue, forKey: "lastRecapDay") }
     }
 
     func setShoulderTaps(_ enabled: Bool) async {
